@@ -5,11 +5,12 @@
 #pragma once
 
 #define B 256
+#define TILE_DIM 32
 #define Q 22
 #define lgH 8
 #define H (1 << lgH)
 
-__global__ void initial_kernel(uint32_t *inp_vals, volatile uint32_t *hist,
+__global__ void initial_kernel(uint32_t *inp_vals, uint32_t *hist,
                                uint32_t current_shift) {
   const uint32_t block_start = blockIdx.x * (blockDim.x * Q);
 
@@ -38,4 +39,22 @@ __global__ void initial_kernel(uint32_t *inp_vals, volatile uint32_t *hist,
   }
 
   return;
+}
+
+__global__ void transpose(uint32_t *hist, uint32_t *hist_tr, int N, int M) {
+  __shared__ uint32_t tile[TILE_DIM][TILE_DIM + 1];
+
+  int x = blockIdx.x * TILE_DIM + threadIdx.x;
+  int y = blockIdx.y * TILE_DIM + threadIdx.y;
+
+  if (x < M && y < N)
+    tile[threadIdx.y][threadIdx.x] = hist[y * M + x];
+
+  __syncthreads();
+
+  x = blockIdx.y * TILE_DIM + threadIdx.x;
+  y = blockIdx.x * TILE_DIM + threadIdx.y;
+
+  if (x < N && y < M)
+    hist_tr[y * N + x] = tile[threadIdx.x][threadIdx.y];
 }
