@@ -3,9 +3,6 @@
 
 #include "constants.cuh"
 #include "pbb_kernels.cuh"
-#include "stdio.h"
-#include <__clang_cuda_math.h>
-#include <__clang_cuda_runtime_wrapper.h>
 
 #define CUDASSERT(code)                                                        \
   {                                                                            \
@@ -55,8 +52,7 @@ void log2UB(uint32_t n, uint32_t *ub, uint32_t *lg) {
  *   each thread so that the number of blocks is <= 1024.
  */
 template <int CHUNK>
-uint32_t getNumBlocks(const uint32_t N, const uint32_t B,
-                      uint32_t *num_chunks) {
+uint32_t getNumBlocks(const uint32_t N, const uint32_t B, uint32_t *num_chunks) {
   const uint32_t max_inp_thds = (N + CHUNK - 1) / CHUNK;
   const uint32_t num_thds0 = min(max_inp_thds, MAX_HWDTH);
 

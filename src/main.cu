@@ -1,5 +1,5 @@
 #include "constants.cuh"
-#include "definitions.cuh"
+#include "kernels.cuh"
 #include "host_skel.cuh"
 #include <cstdint>
 #include <cuda_runtime.h>
@@ -7,6 +7,13 @@
 #include <stdlib.h>
 
 int main() {
+
+  const uint32_t Q = 22;
+  const uint32_t B = 256;
+  const uint32_t lgH = 8;
+  const uint32_t H = (1 << lgH);
+  const uint32_t T = 32;
+
   initHwd();
 
   const uint32_t array_length = 1 << 20;
@@ -26,7 +33,7 @@ int main() {
   uint32_t *d_hist;
   cudaMalloc((void **)&d_hist, hist_size);
 
-  initial_kernel<<<num_blocks, B>>>(d_inp_vals, d_hist, 0);
+  initial_kernel<H, lgH><<<num_blocks, B>>>(d_inp_vals, d_hist, 0, Q);
   CUDASSERT(cudaPeekAtLastError());
   cudaDeviceSynchronize();
   printf("Successfully initial_kernel.\n");
@@ -37,12 +44,12 @@ int main() {
   int n = num_blocks;
   int m = H;
 
-  int dimy = (n + TILE_DIM - 1) / TILE_DIM;
-  int dimx = (m + TILE_DIM - 1) / TILE_DIM;
-  dim3 block(TILE_DIM, TILE_DIM, 1);
+  int dimy = (n + T - 1) / T;
+  int dimx = (m + T - 1) / T;
+  dim3 block(T, T, 1);
   dim3 grid(dimx, dimy, 1);
 
-  transpose<<<grid, block>>>(d_hist, d_hist_tr, n, m);
+  transpose<T><<<grid, block>>>(d_hist, d_hist_tr, n, m);
   CUDASSERT(cudaPeekAtLastError());
   cudaDeviceSynchronize();
 
@@ -63,11 +70,11 @@ int main() {
   printf("Successfully scanInc.\n");
 
   // Transpose result back to original layout
-  transpose<<<grid, block>>>(d_hist_tr, d_hist, m, n);
+  transpose<T><<<grid, block>>>(d_hist_tr, d_hist, m, n);
   CUDASSERT(cudaPeekAtLastError());
   cudaDeviceSynchronize();
 
-  printf("Successfully scanInc.\n");
+  printf("Successfully transpose after scan.\n");
 
   free(inp_vals);
   cudaFree(d_inp_vals);
