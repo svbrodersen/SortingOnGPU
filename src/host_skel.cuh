@@ -6,7 +6,6 @@
 #include "stdio.h"
 #include <__clang_cuda_math.h>
 #include <__clang_cuda_runtime_wrapper.h>
-#include <algorithm>
 
 #define CUDASSERT(code)                                                        \
   {                                                                            \
