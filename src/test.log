@@ -1,9 +1,0 @@
-Device name: NVIDIA A100-PCIE-40GB
-Number of hardware threads: 221184
-Max block size: 1024
-Shared memory size: 49152
-====
-Successfully initial_kernel.
-Successfully transpose.
-Successfully scanInc.
-Successfully transpose after scan.

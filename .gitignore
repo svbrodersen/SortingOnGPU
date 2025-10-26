@@ -1,0 +1,8 @@
+﻿# build outputs & logs
+*.log
+*.o
+*.out
+*.exe
+*.ptx
+main
+src/test_correctness
