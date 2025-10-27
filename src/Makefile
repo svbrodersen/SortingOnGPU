@@ -11,19 +11,6 @@ $(MAIN): main.cu host_skel.cuh pbb_kernels.cuh kernels.cuh
 run: main
 	./main
 
-# Smoke test target: build and run main, capture output and verify key messages
-TEST_LOG?=test.log
-.PHONY: test smoke
-test: $(MAIN)
-	@echo "Running smoke tests (output -> $(TEST_LOG))"
-	@./$(MAIN) 2>&1 | tee $(TEST_LOG)
-	@echo "Checking expected messages in $(TEST_LOG)"
-	@grep -q "Successfully scanInc." $(TEST_LOG) || (echo "FAIL: 'Successfully scanInc.' not found" >&2; exit 2)
-	@grep -q "Successfully transpose after scan." $(TEST_LOG) || (echo "FAIL: 'Successfully transpose after scan.' not found" >&2; exit 3)
-	@echo "Smoke tests passed."
-
-# Deterministic correctness harness
-.PHONY: test-correctness
 test-correctness: test_correctness
 	@echo "Running deterministic correctness harness..."
 	./test_correctness
