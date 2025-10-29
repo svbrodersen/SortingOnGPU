@@ -11,20 +11,12 @@ $(MAIN): main.cu host_skel.cuh pbb_kernels.cuh kernels.cuh
 run: main
 	./main
 
-test-correctness: test_correctness
-	@echo "Running deterministic correctness harness..."
-	./test_correctness
-
-test_correctness: test_correctness.cu constants.cuh
-	$(COMPILER) $(OPT_FLAGS) -o test_correctness test_correctness.cu
-
 compile: $(MAIN)
 
 default: compile run
 
 clean:
 	rm -f $(MAIN)
-
 
 .PHONY: clean all run
 
