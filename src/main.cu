@@ -91,14 +91,14 @@ int radixSort(uint32_t *inp_vals, uint32_t *out_vals, uint32_t N) {
 
   printDeviceArray(d_hist_tr, hist_mem_size, H, "d_hist_scan");
 
-  const uint32_t shared_mem_size = (2 * B * Q + 2 * H + B) * sizeof(uint32_t);
-
+  const uint32_t shared_mem_size = (B * Q + 2 * H + B) * sizeof(uint32_t);
   final_kernel<H, lgH, B, Q><<<num_blocks, B, shared_mem_size>>>(
       d_inp_vals, d_out_vals, d_hist, d_hist_scan, current_shift, N);
   CUDASSERT(cudaPeekAtLastError());
   cudaDeviceSynchronize();
 
   printf("Successfully final_kernel.\n");
+  printDeviceArray(d_out_vals, mem_size, 10, "d_out_vals");
 
   // Copy result back to host (assuming this is the only pass for demonstration)
   cudaMemcpy(out_vals, d_out_vals, mem_size, cudaMemcpyDeviceToHost);

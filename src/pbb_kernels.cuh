@@ -2,6 +2,7 @@
 #define PBB_KERNELS
 
 #include <cmath>
+#include <cstdint>
 #include <cuda_runtime.h>
 
 /**
@@ -509,6 +510,16 @@ __device__ inline void copyFromGlb2ShrMem(const uint32_t glb_offs,
     shmem_inp[loc_ind] = elm;
   }
   __syncthreads(); // leave this here at the end!
+}
+
+template <class T, uint32_t CHUNK, uint32_t Q>
+__device__ inline void
+copyFromGlb2ShrMem2Reg(const uint32_t glb_offs, const uint32_t N, const T &ne,
+                       T *d_inp, volatile T *shmem_inp, volatile T reg_mem[Q]) {
+  copyFromGlb2ShrMem<T, CHUNK>(glb_offs, N, ne, d_inp, shmem_inp);
+  for (uint32_t q = 0; q < Q; q++) {
+    reg_mem[q] = shmem_inp[threadIdx.x * Q + q];
+  }
 }
 
 /**
