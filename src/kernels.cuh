@@ -83,15 +83,17 @@ __device__ void partition2_by_bit(uint32_t *s_data, uint32_t reg_mem[Q],
   uint32_t split = s_scan_storage[B - 1];
 
   uint32_t indT = 0;
+  uint32_t indF = 0;
 #pragma unroll
   for (int q = 0; q < Q; q++) {
     uint32_t elm = reg_mem[q];
     uint32_t bit_is_0 = 1 - (elm >> current_bit) & 1u;
     indT += bit_is_0;
+    indF += 1 - bit_is_0;
     if (bit_is_0 == 1) {
       s_data[indT - 1] = elm;
     } else {
-      s_data[split + thid * Q + q - indT] = elm;
+      s_data[split + indF - 1] = elm;
     }
   }
 
