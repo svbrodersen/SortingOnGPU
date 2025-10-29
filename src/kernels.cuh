@@ -1,3 +1,4 @@
+#include "host_skel.cuh"
 #include <cstdint>
 
 #pragma once
@@ -56,7 +57,6 @@ __global__ void transpose(uint32_t *hist, uint32_t *hist_tr, int N, int M) {
     hist_tr[y * N + x] = tile[threadIdx.x][threadIdx.y];
 }
 
-
 template <uint32_t B, uint32_t H>
 __device__ void block_exclusive_scan(uint32_t *data, uint32_t *temp_storage) {
   uint32_t thid = threadIdx.x;
@@ -92,9 +92,44 @@ __device__ void block_exclusive_scan(uint32_t *data, uint32_t *temp_storage) {
 }
 
 template <uint32_t B, uint32_t Q>
-__device__ void partition_by_bit(uint32_t *s_data, uint32_t *s_temp,
-                                 uint32_t bit_mask, uint32_t *s_scan_storage) {
-  // TODO: not implemented
+__device__ void partition2_by_bit(uint32_t *s_data, uint32_t *s_temp,
+                                  uint32_t current_offset,
+                                  uint32_t *s_scan_storage) {
+  uint32_t unset_count = 0;
+  uint32_t thid = threadIdx.x;
+  for (int q = 0; q < Q; q++) {
+    uint32_t elm = s_data[thid + q * blockDim.x];
+    if ((elm & (current_offset + q)) == 0) {
+      unset_count++;
+    }
+  }
+
+  s_scan_storage[thid] = unset_count;
+  __syncthreads();
+
+  // Perform an inclusive scan on counts
+  for (uint32_t d = 1; d < blockDim.x; d *= 2) {
+    uint32_t val = (thid >= d) ? s_scan_storage[thid - d] : 0;
+    __syncthreads();
+    s_scan_storage[thid] += val;
+    __syncthreads();
+  }
+
+  uint32_t total_unset = s_scan_storage[blockDim.x - 1];
+  uint32_t unset_offset = (thid > 0) ? s_scan_storage[thid - 1] : 0;
+  __syncthreads();
+
+  uint32_t set_offset = total_unset + (thid * Q - unset_count);
+
+#pragma unroll
+  for (int q = 0; q < Q; q++) {
+    uint32_t val = s_data[thid + q * blockDim.x];
+    if ((val & (current_offset + q)) == 0) {
+      s_temp[unset_offset++] = val;
+    } else {
+      s_temp[set_offset++] = val;
+    }
+  }
 }
 
 template <uint32_t H, uint32_t lgH, uint32_t B, uint32_t Q>
@@ -132,10 +167,9 @@ __global__ void final_kernel(uint32_t *inp_vals, uint32_t *out_vals,
   // --- Step 2: Loop of size lgH for two-way partitioning  ---
   // (This performs an in-block radix sort)
   for (uint32_t k = 0; k < lgH; k++) {
-    uint32_t bit_mask = 1u << (current_shift * lgH + k);
 
     // Partition s_data -> s_temp based on bit k
-    partition_by_bit<B, Q>(s_data, s_temp, bit_mask, s_scan_storage);
+    partition2_by_bit<B, Q>(s_data, s_temp, current_shift, s_scan_storage);
     __syncthreads();
 
 // Copy s_temp -> s_data for the next iteration
@@ -155,14 +189,13 @@ __global__ void final_kernel(uint32_t *inp_vals, uint32_t *out_vals,
     s_local_hist[i] = orig_hist[block_id * H + i];
 
     // Load this block's global offset for bin 'i'
-    // (Assumes scanned_hist is transposed: [bin][block])
     s_global_offsets[i] = scanned_hist[i * num_blocks + block_id];
   }
   __syncthreads();
 
   // 3.2: Scan in place the original histogram
   // This gives the *local* offset for each bin.
-  block_exclusive_scan<B, H>(s_local_hist, s_scan_storage);
+  scanIncBlock<Add<uint32_t>>(s_local_hist, threadIdx.x);
   // s_local_hist[bin] now holds the starting index in s_data[] for 'bin'.
   __syncthreads();
 
@@ -179,13 +212,8 @@ __global__ void final_kernel(uint32_t *inp_vals, uint32_t *out_vals,
     uint32_t val = s_data[local_idx]; // Get the locally sorted value
     uint32_t bin = (val >> (current_shift * lgH)) & mask;
 
-    uint32_t global_bin_offset = s_global_offsets[bin];
-    uint32_t local_bin_start = s_local_hist[bin];
+    uint32_t final_idx = scanned_hist[blockIdx.x * H + bin] - s_local_hist[bin];
 
-    // Calculate rank of this element within its bin
-    // (This works because s_data is locally sorted)
-    uint32_t rank_in_bin = local_idx - local_bin_start;
-
-    out_vals[global_bin_offset + rank_in_bin] = val;
+    out_vals[final_idx] = val;
   }
 }
