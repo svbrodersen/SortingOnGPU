@@ -4,5 +4,5 @@
 *.out
 *.exe
 *.ptx
-main
+src/main
 src/test_correctness
