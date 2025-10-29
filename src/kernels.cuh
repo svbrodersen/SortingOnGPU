@@ -1,6 +1,7 @@
 #include "host_skel.cuh"
 #include "pbb_kernels.cuh"
 #include <cstdint>
+#include <cstdio>
 
 #pragma once
 
@@ -135,10 +136,21 @@ __global__ void final_kernel(uint32_t *inp_vals, uint32_t *out_vals,
     } else {
       s_inp[local_idx] = UINT32_MAX;
     }
-    reg_mem[q] = s_inp[local_idx];
   }
 
   __syncthreads();
+
+  for (int q = 0; q < Q; q++) {
+    uint32_t local_idx = Q * threadIdx.x + q;
+    reg_mem[q] = s_inp[local_idx];
+  }
+
+  for (int q = 0; q < Q; q++) {
+    uint32_t idx = Q * threadIdx.x + q;
+    if (idx < N_global) {
+      printf("first: reg_mem[%d] = %d\n", idx, reg_mem[q]);
+    }
+  }
 
   // --- Step 2: Loop of size lgH for two-way partitioning  ---
   // (This performs an in-block radix sort)
@@ -147,8 +159,22 @@ __global__ void final_kernel(uint32_t *inp_vals, uint32_t *out_vals,
     // Partition s_data -> s_temp based on bit k
     partition2_by_bit<B, Q>(s_inp, reg_mem, (current_shift * lgH + k),
                             s_scan_storage, k == lgH - 1);
+    for (int q = 0; q < Q; q++) {
+      uint32_t idx = Q * threadIdx.x + q;
+      if (idx < N_global && k == 0) {
+        printf("q: %d: reg_mem[%d] = %d\n", q, idx, reg_mem[q]);
+      }
+    }
     __syncthreads();
   }
+
+  for (int q = 0; q < Q; q++) {
+    uint32_t idx = Q * threadIdx.x + q;
+    if (idx < N_global) {
+      printf("reg_mem[%d] = %d\n", idx, reg_mem[q]);
+    }
+  }
+
   // At this point, s_inp is locally sorted by the current lgH bits.
 
   // --- Step 3: After the loop  ---
