@@ -83,15 +83,17 @@ __device__ void partition2_by_bit(uint32_t *s_data, uint32_t reg_mem[Q],
   uint32_t split = s_scan_storage[B - 1];
 
   uint32_t indT = 0;
+  uint32_t indF = 0;
 #pragma unroll
   for (int q = 0; q < Q; q++) {
     uint32_t elm = reg_mem[q];
-    uint32_t bit_is_0 = 1 - (elm >> current_bit) & 1u;
+    uint32_t bit_is_0 = 1u - ((elm >> current_bit) & 1u);
     indT += bit_is_0;
+    indF += 1u - bit_is_0;
     if (bit_is_0 == 1) {
       s_data[indT - 1] = elm;
     } else {
-      s_data[split + thid * Q + q - indT] = elm;
+      s_data[split + indF - 1] = elm;
     }
   }
 
@@ -121,7 +123,7 @@ __global__ void final_kernel(uint32_t *inp_vals, uint32_t *out_vals,
   uint32_t *s_inp = s_mem;                        // size N
   uint32_t *s_local_hist = s_inp + N;             // size H
   uint32_t *s_local_scanned = s_local_hist + H;   // size H
-  uint32_t *s_scan_storage = s_local_scanned + B; // size B (for helpers)
+  uint32_t *s_scan_storage = s_local_scanned + H; // size B (for helpers)
 
   // --- Step 1: Copy Q*B elements to shared memory  ---
   const uint32_t block_start = block_id * N;
@@ -129,7 +131,7 @@ __global__ void final_kernel(uint32_t *inp_vals, uint32_t *out_vals,
 
 #pragma unroll
   for (int q = 0; q < Q; q++) {
-    uint32_t local_idx = q * B + thid;
+    uint32_t local_idx = Q * thid + q;
     uint32_t global_idx = block_start + local_idx;
     if (global_idx < N_global) {
       s_inp[local_idx] = inp_vals[global_idx];
@@ -141,15 +143,8 @@ __global__ void final_kernel(uint32_t *inp_vals, uint32_t *out_vals,
   __syncthreads();
 
   for (int q = 0; q < Q; q++) {
-    uint32_t local_idx = Q * threadIdx.x + q;
+    uint32_t local_idx = Q * thid + q;
     reg_mem[q] = s_inp[local_idx];
-  }
-
-  for (int q = 0; q < Q; q++) {
-    uint32_t idx = Q * threadIdx.x + q;
-    if ((idx < N_global) && (reg_mem[q] < 256)) {
-      printf("first: reg_mem[%d] = %d\n", idx, reg_mem[q]);
-    }
   }
 
   // --- Step 2: Loop of size lgH for two-way partitioning  ---
@@ -158,21 +153,8 @@ __global__ void final_kernel(uint32_t *inp_vals, uint32_t *out_vals,
 
     // Partition s_data -> s_temp based on bit k
     partition2_by_bit<B, Q>(s_inp, reg_mem, (current_shift * lgH + k),
-                            s_scan_storage, k == lgH - 1);
-    // for (int q = 0; q < Q; q++) {
-    //   uint32_t idx = Q * threadIdx.x + q;
-    //   if (idx < N_global && k == 0) {
-    //     printf("q: %d: reg_mem[%d] = %d\n", q, idx, reg_mem[q]);
-    //   }
-    // }
+                            s_scan_storage, k == (lgH - 1));
     __syncthreads();
-  }
-
-  for (int q = 0; q < Q; q++) {
-    uint32_t idx = Q * threadIdx.x + q;
-    if (idx < N_global) {
-      printf("reg_mem[%d] = %d\n", idx, reg_mem[q]);
-    }
   }
 
   // At this point, s_inp is locally sorted by the current lgH bits.

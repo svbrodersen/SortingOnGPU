@@ -101,16 +101,15 @@ int radixSort(uint32_t *inp_vals, uint32_t *out_vals, uint32_t N) {
 
     // printDeviceArray(d_hist_scan, hist_mem_size, H, "d_hist_scan");
 
-    const uint32_t shared_mem_size = (B * Q + 2 * H + B) * sizeof(uint32_t);
+    const uint32_t shared_mem_size = (B * Q + H + H + B) * sizeof(uint32_t);
     final_kernel<H, lgH, B, Q><<<num_blocks, B, shared_mem_size>>>(
         d_inp_vals, d_out_vals, d_hist, d_hist_scan, current_shift, N);
     CUDASSERT(cudaPeekAtLastError());
     cudaDeviceSynchronize();
 
-    // printf("Successfully final_kernel.\n");
-    // printDeviceArray(d_out_vals, mem_size, 10, "d_out_vals");
+    printf("Successfully final_kernel.\n");
+    printDeviceArray(d_out_vals, mem_size, 10, "d_out_vals");
 
-    d_inp_vals = d_out_vals;
   }
 
   // Copy result back to host (assuming this is the only pass for demonstration)
@@ -140,21 +139,21 @@ int main() {
   uint32_t *out_vals = (uint32_t *)malloc(mem_size);
 
   if (radixSort(inp_vals, out_vals, N) == 0) {
-    // printArray(out_vals, 100, "out_vals");
+    printArray(out_vals, 100, "out_vals");
 
     // Simple verification for the first pass (lowest 8 bits)
     bool sorted = true;
     for (uint32_t i = 0; i < N - 1; i++) {
       if ((out_vals[i] & 0xFF) > (out_vals[i + 1] & 0xFF)) {
         sorted = false;
-        // printf("Sort failed at index %u: %u (bin %u) > %u (bin %u)\n", i,
-        //        out_vals[i], out_vals[i] & 0xFF, out_vals[i + 1],
-        //        out_vals[i + 1] & 0xFF);
+        printf("Sort failed at index %u: %u (bin %u) > %u (bin %u)\n", i,
+               out_vals[i], out_vals[i] & 0xFF, out_vals[i + 1],
+               out_vals[i + 1] & 0xFF);
         break;
       }
     }
     if (sorted) {
-      // printf("Array is correctly sorted by the lowest 8 bits.\n");
+      printf("Array is correctly sorted by the lowest 8 bits.\n");
     }
   }
 
