@@ -84,16 +84,17 @@ __device__ void partition2_by_bit(uint32_t *s_data, uint32_t reg_mem[Q],
 
   uint32_t indT = 0;
   uint32_t indF = 0;
+  uint32_t num_ones_before = thid * Q - res;
 #pragma unroll
   for (int q = 0; q < Q; q++) {
     uint32_t elm = reg_mem[q];
     uint32_t bit_is_0 = 1u - ((elm >> current_bit) & 1u);
-    indT += bit_is_0;
-    indF += 1u - bit_is_0;
     if (bit_is_0 == 1) {
-      s_data[indT - 1] = elm;
+      s_data[res + indT] = elm;
+      indT++;
     } else {
-      s_data[split + indF - 1] = elm;
+      s_data[split + num_ones_before + indF] = elm;
+      indF++;
     }
   }
 
@@ -157,14 +158,11 @@ __global__ void final_kernel(uint32_t *inp_vals, uint32_t *out_vals,
     __syncthreads();
   }
 
+  // At this point, s_inp is locally sorted by the current lgH bits.
   for (int q = 0; q < Q; q++) {
     uint32_t idx = Q * threadIdx.x + q;
-    if (idx < N_global && reg_mem[q] < 256) {
-      printf("reg_mem[%d] = %d\n", idx, reg_mem[q]);
-    }
+    s_inp[idx] = reg_mem[q];
   }
-
-  // At this point, s_inp is locally sorted by the current lgH bits.
 
   // --- Step 3: After the loop  ---
 
@@ -190,7 +188,7 @@ __global__ void final_kernel(uint32_t *inp_vals, uint32_t *out_vals,
   const uint32_t mask = H - 1u;
 #pragma unroll
   for (int q = 0; q < Q; q++) {
-    uint32_t local_idx = thid + q * B;
+    uint32_t local_idx = thid * Q + q;
     uint32_t val = s_inp[local_idx]; // Get the locally sorted value
     uint32_t bin = (val >> (current_shift * lgH)) & mask;
 
