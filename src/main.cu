@@ -51,6 +51,9 @@ int radixSort(uint32_t *inp_vals, uint32_t *out_vals, uint32_t N) {
   uint32_t *d_hist_scan;
   cudaMalloc((void **)&d_hist_scan, hist_mem_size);
 
+  uint32_t *d_hist_scan_tr_tr;
+  cudaMalloc((void **)&d_hist_scan_tr_tr, hist_mem_size);
+
   uint32_t *d_hist;
   cudaMalloc((void **)&d_hist, hist_mem_size);
 
@@ -70,6 +73,12 @@ int radixSort(uint32_t *inp_vals, uint32_t *out_vals, uint32_t N) {
     largest_shift = largest_bit_pos / lgH + 1;
   }
 
+  int dimy = (num_blocks + T - 1) / T;
+  int dimx = (H + T - 1) / T;
+  dim3 block(T, T, 1);
+  dim3 grid_forward(dimx, dimy, 1);
+  dim3 grid_backward(dimx, dimy, 1);
+
   // printf("Largest shift: %d\n", largest_shift);
   for (uint32_t current_shift = 0u; current_shift < largest_shift;
        current_shift++) {
@@ -78,43 +87,35 @@ int radixSort(uint32_t *inp_vals, uint32_t *out_vals, uint32_t N) {
     CUDASSERT(cudaPeekAtLastError());
     cudaDeviceSynchronize();
     // printf("Successfully initial_kernel.\n");
-    printDeviceArray(d_hist, hist_mem_size, 10, "d_hist");
 
-    int dimy = (num_blocks + T - 1) / T;
-    int dimx = (H + T - 1) / T;
-    dim3 block(T, T, 1);
-    dim3 grid(dimx, dimy, 1);
 
-    transpose<T><<<grid, block>>>(d_hist, d_hist_scan, num_blocks, H);
+    transpose<T><<<grid_forward, block>>>(d_hist, d_hist_scan, num_blocks, H);
     CUDASSERT(cudaPeekAtLastError());
     cudaDeviceSynchronize();
 
     // Allocate temporary arrays for scanInc
-
     scanInc<Add<uint32_t>>(B, hist_size, d_hist_scan, d_hist_scan, d_tmp_vals);
     CUDASSERT(cudaPeekAtLastError());
     cudaDeviceSynchronize();
 
-    printDeviceArray(d_hist_scan, hist_mem_size, H, "d_hist_scan");
-
     // printf("Successfully scanInc.\n");
 
-    transpose<T><<<grid, block>>>(d_hist_scan, d_hist_scan, num_blocks, H);
+    transpose<T><<<grid_backward, block>>>(d_hist_scan, d_hist_scan_tr_tr, H, num_blocks);
     // printf("Successfully transpose.\n");
+    printDeviceArray(d_hist_scan_tr_tr, hist_mem_size, H, "d_hist_scan_tr_tr");
 
 
     const uint32_t shared_mem_size = (B * Q + H + H + B) * sizeof(uint32_t);
     final_kernel<H, lgH, B, Q><<<num_blocks, B, shared_mem_size>>>(
-        d_inp_vals, d_out_vals, d_hist, d_hist_scan, current_shift, N);
+        d_inp_vals, d_out_vals, d_hist, d_hist_scan_tr_tr, current_shift, N);
     CUDASSERT(cudaPeekAtLastError());
     cudaDeviceSynchronize();
 
     printf("Successfully final_kernel.\n");
-    printDeviceArray(d_out_vals, mem_size, 10, "output_pass");
+    printDeviceArray(d_out_vals, mem_size, 100, "output_pass");
 
 
      std::swap(d_inp_vals, d_out_vals);
-    cudaMemset(d_out_vals, 0, mem_size);
   }
 
   // Copy result back to host (assuming this is the only pass for demonstration)
@@ -134,12 +135,12 @@ int main() {
   // This works
   const uint32_t N = Q*B;
   // This fails
-  const uint32_t N = Q*B+1;
+  // const uint32_t N = Q*B+1;
   const uint32_t mem_size = N * sizeof(uint32_t);
 
   uint32_t *inp_vals = (uint32_t *)malloc(mem_size);
   for (int i = 0; i < N; i++) {
-    inp_vals[i] = rand();
+    inp_vals[i] = N-i;
   }
 
   // printArray(inp_vals, 10, "inp_vals");
