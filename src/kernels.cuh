@@ -69,7 +69,7 @@ __device__ void partition2_by_bit(uint32_t *s_data, uint32_t reg_mem[Q],
 #pragma unroll
   for (int q = 0; q < Q; q++) {
     uint32_t elm = reg_mem[q];
-    uint32_t bit_is_0 = 1 - ((elm >> current_bit) & 1u);
+    uint32_t bit_is_0 = 1u - ((elm >> current_bit) & 1u);
     S += bit_is_0;
   }
   s_scan_storage[thid] = S;
@@ -155,6 +155,13 @@ __global__ void final_kernel(uint32_t *inp_vals, uint32_t *out_vals,
     partition2_by_bit<B, Q>(s_inp, reg_mem, (current_shift * lgH + k),
                             s_scan_storage, k == (lgH - 1));
     __syncthreads();
+  }
+
+  for (int q = 0; q < Q; q++) {
+    uint32_t idx = Q * threadIdx.x + q;
+    if (idx < N_global && reg_mem[q] < 256) {
+      printf("reg_mem[%d] = %d\n", idx, reg_mem[q]);
+    }
   }
 
   // At this point, s_inp is locally sorted by the current lgH bits.
