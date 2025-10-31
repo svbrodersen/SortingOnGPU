@@ -26,12 +26,13 @@ void printDeviceArray(uint32_t *inp_vals, int mem_size, uint32_t N,
   printArray(d_hist_host, N, name);
 }
 
+const uint32_t Q = 22;
+const uint32_t B = 256;
+const uint32_t lgH = 8;
+const uint32_t H = (1 << lgH);
+const uint32_t T = 32;
+
 int radixSort(uint32_t *inp_vals, uint32_t *out_vals, uint32_t N) {
-  const uint32_t Q = 22;
-  const uint32_t B = 256;
-  const uint32_t lgH = 8;
-  const uint32_t H = (1 << lgH);
-  const uint32_t T = 32;
 
   const uint32_t mem_size = N * sizeof(uint32_t);
 
@@ -54,7 +55,7 @@ int radixSort(uint32_t *inp_vals, uint32_t *out_vals, uint32_t N) {
   cudaMalloc((void **)&d_hist, hist_mem_size);
 
   uint32_t *d_tmp_vals;
-  cudaMalloc((void **)&d_tmp_vals, num_blocks * sizeof(uint32_t));
+  cudaMalloc((void **)&d_tmp_vals, hist_size * sizeof(uint32_t));
 
   uint32_t largest_shift;
   {
@@ -77,7 +78,7 @@ int radixSort(uint32_t *inp_vals, uint32_t *out_vals, uint32_t N) {
     CUDASSERT(cudaPeekAtLastError());
     cudaDeviceSynchronize();
     // printf("Successfully initial_kernel.\n");
-    // printDeviceArray(d_hist, hist_mem_size, 256, "d_hist");
+    printDeviceArray(d_hist, hist_mem_size, 10, "d_hist");
 
     int dimy = (num_blocks + T - 1) / T;
     int dimx = (H + T - 1) / T;
@@ -94,12 +95,13 @@ int radixSort(uint32_t *inp_vals, uint32_t *out_vals, uint32_t N) {
     CUDASSERT(cudaPeekAtLastError());
     cudaDeviceSynchronize();
 
+    printDeviceArray(d_hist_scan, hist_mem_size, H, "d_hist_scan");
+
     // printf("Successfully scanInc.\n");
 
     transpose<T><<<grid, block>>>(d_hist_scan, d_hist_scan, num_blocks, H);
     // printf("Successfully transpose.\n");
 
-    // printDeviceArray(d_hist_scan, hist_mem_size, H, "d_hist_scan");
 
     const uint32_t shared_mem_size = (B * Q + H + H + B) * sizeof(uint32_t);
     final_kernel<H, lgH, B, Q><<<num_blocks, B, shared_mem_size>>>(
@@ -108,12 +110,15 @@ int radixSort(uint32_t *inp_vals, uint32_t *out_vals, uint32_t N) {
     cudaDeviceSynchronize();
 
     printf("Successfully final_kernel.\n");
-    printDeviceArray(d_out_vals, mem_size, 10, "d_out_vals");
+    printDeviceArray(d_out_vals, mem_size, 10, "output_pass");
 
+
+     std::swap(d_inp_vals, d_out_vals);
+    cudaMemset(d_out_vals, 0, mem_size);
   }
 
   // Copy result back to host (assuming this is the only pass for demonstration)
-  cudaMemcpy(out_vals, d_out_vals, mem_size, cudaMemcpyDeviceToHost);
+  cudaMemcpy(out_vals, d_inp_vals, mem_size, cudaMemcpyDeviceToHost);
 
   cudaFree(d_inp_vals);
   cudaFree(d_out_vals);
@@ -126,12 +131,15 @@ int radixSort(uint32_t *inp_vals, uint32_t *out_vals, uint32_t N) {
 int main() {
   initHwd();
 
-  const uint32_t N = 22 * 256;
+  // This works
+  const uint32_t N = Q*B;
+  // This fails
+  const uint32_t N = Q*B+1;
   const uint32_t mem_size = N * sizeof(uint32_t);
 
   uint32_t *inp_vals = (uint32_t *)malloc(mem_size);
   for (int i = 0; i < N; i++) {
-    inp_vals[i] = N - i;
+    inp_vals[i] = rand();
   }
 
   // printArray(inp_vals, 10, "inp_vals");
@@ -143,12 +151,11 @@ int main() {
 
     // Simple verification for the first pass (lowest 8 bits)
     bool sorted = true;
-    for (uint32_t i = 0; i < N - 1; i++) {
-      if ((out_vals[i] & 0xFF) > (out_vals[i + 1] & 0xFF)) {
+    for (uint32_t i = 0; i < N-1; i++) {
+      if ((out_vals[i]) > (out_vals[i + 1])) {
         sorted = false;
-        printf("Sort failed at index %u: %u (bin %u) > %u (bin %u)\n", i,
-               out_vals[i], out_vals[i] & 0xFF, out_vals[i + 1],
-               out_vals[i + 1] & 0xFF);
+        printf("Sort failed at index %u: %u > %u \n", i,
+               out_vals[i], out_vals[i]);
         break;
       }
     }

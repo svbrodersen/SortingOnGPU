@@ -2,6 +2,7 @@
 #include "pbb_kernels.cuh"
 #include <cstdint>
 #include <cstdio>
+#include <sys/types.h>
 
 #pragma once
 
@@ -60,7 +61,7 @@ __global__ void transpose(uint32_t *hist, uint32_t *hist_tr, int N, int M) {
 }
 
 template <uint32_t B, uint32_t Q>
-__device__ void partition2_by_bit(uint32_t *s_data, uint32_t reg_mem[Q],
+__device__ void partition2_by_bit(uint32_t *s_inp, uint32_t reg_mem[Q],
                                   uint32_t current_bit,
                                   uint32_t *s_scan_storage, bool is_last) {
   uint32_t thid = threadIdx.x;
@@ -76,38 +77,40 @@ __device__ void partition2_by_bit(uint32_t *s_data, uint32_t reg_mem[Q],
 
   __syncthreads();
 
-  uint32_t res = scanIncBlock<Add<uint32_t>>(s_scan_storage, threadIdx.x);
+  // inclusive scatter
+  uint32_t res = scanIncBlock<Add<uint32_t>>(s_scan_storage, thid);
   __syncthreads();
   s_scan_storage[thid] = res;
   __syncthreads();
-  uint32_t split = s_scan_storage[B - 1];
+  uint32_t total_zeros = s_scan_storage[B - 1];
 
-  uint32_t indT = 0;
-  uint32_t indF = 0;
-  uint32_t num_ones_before = thid * Q - res;
+
+  // Scatter into shared array.
+  uint32_t count_zero = 0;
+  uint32_t count_one = 0;
+  uint32_t inclusive_zero = s_scan_storage[thid];
+  uint32_t exclusive_zero = inclusive_zero - S;
 #pragma unroll
   for (int q = 0; q < Q; q++) {
     uint32_t elm = reg_mem[q];
     uint32_t bit_is_0 = 1u - ((elm >> current_bit) & 1u);
     if (bit_is_0 == 1) {
-      s_data[res + indT] = elm;
-      indT++;
+      s_inp[exclusive_zero + count_zero] = elm;
+      count_zero++;
     } else {
-      s_data[split + num_ones_before + indF] = elm;
-      indF++;
+      uint32_t exclusive_one = thid * Q - exclusive_zero;
+      s_inp[total_zeros + exclusive_one + count_one] = elm;
+      count_one++;
     }
   }
+  __syncthreads();
 
-  if (is_last) {
-    for (int q = 0; q < Q; q++) {
-      reg_mem[q] = s_data[thid * Q + q];
-    }
-  } else {
-    for (int q = 0; q < Q; q++) {
-      uint32_t loc_pos = q * B + thid;
-      reg_mem[q] = s_data[loc_pos];
-    }
+  // Copy the new ordering back into register memory
+  for (int q = 0; q < Q; q++) {
+    uint32_t loc_pos = thid * Q + q;
+    reg_mem[q] = s_inp[loc_pos];
   }
+  __syncthreads();
 }
 
 template <uint32_t H, uint32_t lgH, uint32_t B, uint32_t Q>
@@ -132,7 +135,7 @@ __global__ void final_kernel(uint32_t *inp_vals, uint32_t *out_vals,
 
 #pragma unroll
   for (int q = 0; q < Q; q++) {
-    uint32_t local_idx = Q * thid + q;
+    uint32_t local_idx = q * B + thid;
     uint32_t global_idx = block_start + local_idx;
     if (global_idx < N_global) {
       s_inp[local_idx] = inp_vals[global_idx];
@@ -151,18 +154,22 @@ __global__ void final_kernel(uint32_t *inp_vals, uint32_t *out_vals,
   // --- Step 2: Loop of size lgH for two-way partitioning  ---
   // (This performs an in-block radix sort)
   for (uint32_t k = 0; k < lgH; k++) {
-
+    uint32_t current_bit = (current_shift * lgH + k);
+    bool is_last = k == (lgH - 1);
     // Partition s_data -> s_temp based on bit k
-    partition2_by_bit<B, Q>(s_inp, reg_mem, (current_shift * lgH + k),
-                            s_scan_storage, k == (lgH - 1));
+    partition2_by_bit<B, Q>(s_inp, reg_mem, current_bit,
+                            s_scan_storage, is_last);
     __syncthreads();
   }
 
-  // At this point, s_inp is locally sorted by the current lgH bits.
-  for (int q = 0; q < Q; q++) {
-    uint32_t idx = Q * threadIdx.x + q;
-    s_inp[idx] = reg_mem[q];
-  }
+  // if (thid == 0) {
+  //   for (uint32_t i = 0; i < Q * B; i++) {
+  //     uint32_t val = s_inp[i] & 0xFF;
+  //     printf("s_inp[%d] = %d\n", i, val) ;
+  //   }
+  // }
+
+
 
   // --- Step 3: After the loop  ---
 
@@ -177,11 +184,11 @@ __global__ void final_kernel(uint32_t *inp_vals, uint32_t *out_vals,
   __syncthreads();
 
   // 3.2: Scan in place the original histogram
-  // This gives the *local* offset for each bin.
-  uint32_t res = scanIncBlock<Add<uint32_t>>(s_local_hist, threadIdx.x);
+  // This gives the *local* offset for each bin. scanIncBlock is inclusive scan.
+  uint32_t res = scanIncBlock<Add<uint32_t>>(s_local_hist, thid);
   // s_local_hist[bin] now holds the starting index in s_data[] for 'bin'.
   __syncthreads();
-  s_local_hist[threadIdx.x] = res;
+  s_local_hist[thid] = res;
   __syncthreads();
 
   // 3.3: Write Q elements to their final global positions
