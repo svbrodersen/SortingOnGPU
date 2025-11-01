@@ -4,8 +4,8 @@
 
 #pragma once
 
-template <uint32_t H, uint32_t lgH, uint32_t Q>
-__global__ void initial_kernel(uint32_t *inp_vals, uint32_t *hist,
+template <typename UnsignedType, uint32_t H, uint32_t lgH, uint32_t Q>
+__global__ void initial_kernel(UnsignedType *inp_vals, uint32_t *hist,
                                uint32_t current_shift, uint32_t N) {
   const uint32_t B = blockDim.x;
   const uint32_t block_start = blockIdx.x * (B * Q);
@@ -18,13 +18,13 @@ __global__ void initial_kernel(uint32_t *inp_vals, uint32_t *hist,
   }
   __syncthreads();
 
-  const uint32_t mask = H - 1u;
+  const uint64_t mask = H - 1u;
 #pragma unroll
   for (int i = 0; i < Q; i++) {
     uint32_t idx = block_start + i * B + threadIdx.x;
     if (idx >= N)
       continue;
-    uint32_t val = inp_vals[idx] >> (current_shift * lgH);
+    UnsignedType val = inp_vals[idx] >> (current_shift * lgH);
     uint32_t bin = val & mask;
     atomicAdd((unsigned int *)&s_hist[bin], 1u);
   }
@@ -58,8 +58,8 @@ __global__ void transpose(uint32_t *hist, uint32_t *hist_tr, int N, int M) {
     hist_tr[y * N + x] = tile[threadIdx.x][threadIdx.y];
 }
 
-template <uint32_t B, uint32_t Q>
-__device__ void partition2_by_bit(uint32_t *s_inp, uint32_t reg_mem[Q],
+template <typename UnsignedType, uint32_t B, uint32_t Q>
+__device__ void partition2_by_bit(UnsignedType *s_inp, UnsignedType reg_mem[Q],
                                   uint32_t current_bit,
                                   uint32_t *s_scan_storage, bool is_last) {
   uint32_t thid = threadIdx.x;
@@ -67,7 +67,7 @@ __device__ void partition2_by_bit(uint32_t *s_inp, uint32_t reg_mem[Q],
 
 #pragma unroll
   for (int q = 0; q < Q; q++) {
-    uint32_t elm = reg_mem[q];
+    UnsignedType elm = reg_mem[q];
     uint32_t bit_is_0 = 1u - ((elm >> current_bit) & 1u);
     S += bit_is_0;
   }
@@ -90,7 +90,7 @@ __device__ void partition2_by_bit(uint32_t *s_inp, uint32_t reg_mem[Q],
   uint32_t exclusive_zero = inclusive_zero - S;
 #pragma unroll
   for (int q = 0; q < Q; q++) {
-    uint32_t elm = reg_mem[q];
+    UnsignedType elm = reg_mem[q];
     uint32_t bit_is_0 = 1u - ((elm >> current_bit) & 1u);
     if (bit_is_0 == 1) {
       s_inp[exclusive_zero + count_zero] = elm;
@@ -111,8 +111,10 @@ __device__ void partition2_by_bit(uint32_t *s_inp, uint32_t reg_mem[Q],
   __syncthreads();
 }
 
-template <uint32_t H, uint32_t lgH, uint32_t B, uint32_t Q>
-__global__ void final_kernel(uint32_t *inp_vals, uint32_t *out_vals,
+template <typename T> __host__ __device__ constexpr T type_max() { return static_cast<T>(~T(0)); }
+
+template <typename UnsignedType, uint32_t H, uint32_t lgH, uint32_t B, uint32_t Q>
+__global__ void final_kernel(UnsignedType *inp_vals, UnsignedType *out_vals,
                              uint32_t *orig_hist, uint32_t *scanned_hist,
                              uint32_t current_shift, uint32_t N_global) {
 
@@ -122,14 +124,14 @@ __global__ void final_kernel(uint32_t *inp_vals, uint32_t *out_vals,
 
   // Shared memory for all 3 steps
   extern __shared__ uint32_t s_mem[];
-  uint32_t *s_inp = s_mem;                        // size N
-  uint32_t *s_local_hist = s_inp + N;             // size H
+  UnsignedType *s_inp = (UnsignedType*) s_mem;                        // size N
+  uint32_t *s_local_hist = (uint32_t*) (s_inp + N);             // size H
   uint32_t *s_local_scanned = s_local_hist + H;   // size H
   uint32_t *s_scan_storage = s_local_scanned + H; // size B (for helpers)
 
   // --- Step 1: Copy Q*B elements to shared memory  ---
   const uint32_t block_start = block_id * N;
-  uint32_t reg_mem[Q];
+  UnsignedType reg_mem[Q];
 
 #pragma unroll
   for (int q = 0; q < Q; q++) {
@@ -138,7 +140,7 @@ __global__ void final_kernel(uint32_t *inp_vals, uint32_t *out_vals,
     if (global_idx < N_global) {
       s_inp[local_idx] = inp_vals[global_idx];
     } else {
-      s_inp[local_idx] = UINT32_MAX;
+      s_inp[local_idx] = type_max<UnsignedType>();
     }
   }
 
@@ -155,19 +157,10 @@ __global__ void final_kernel(uint32_t *inp_vals, uint32_t *out_vals,
     uint32_t current_bit = (current_shift * lgH + k);
     bool is_last = k == (lgH - 1);
     // Partition s_data -> s_temp based on bit k
-    partition2_by_bit<B, Q>(s_inp, reg_mem, current_bit,
+    partition2_by_bit<UnsignedType, B, Q>(s_inp, reg_mem, current_bit,
                             s_scan_storage, is_last);
     __syncthreads();
   }
-
-  // if (thid == 0) {
-  //   for (uint32_t i = 0; i < Q * B; i++) {
-  //     uint32_t val = s_inp[i] & 0xFF;
-  //     printf("s_inp[%d] = %d\n", i, val) ;
-  //   }
-  // }
-
-
 
   // --- Step 3: After the loop  ---
 
@@ -194,7 +187,7 @@ __global__ void final_kernel(uint32_t *inp_vals, uint32_t *out_vals,
 #pragma unroll
   for (int q = 0; q < Q; q++) {
     uint32_t local_idx = thid * Q + q;
-    uint32_t val = s_inp[local_idx]; // Get the locally sorted value
+    UnsignedType val = s_inp[local_idx]; // Get the locally sorted value
     uint32_t bin = (val >> (current_shift * lgH)) & mask;
 
     uint32_t final_idx =

@@ -8,44 +8,98 @@
 #include <type_traits>
 #include <vector>
 
-template <typename T, bool IsSigned> struct ValueTraitImpl;
+template <typename T, bool IsSigned, bool IsFloat> struct ValueTraitImpl;
 
-template <typename T> struct ValueTraitImpl<T, false> {
+template <typename T> struct ValueTraitImpl<T, false, false> {
 public:
   using UnsignedType = typename std::make_unsigned<T>::type;
 
-  static __host__ __device__ UnsignedType encode(T v) {
+  static UnsignedType encode(T v) {
     return static_cast<UnsignedType>(v);
   }
 
-  static __host__ __device__ T decode(UnsignedType v) {
+  static T decode(UnsignedType v) {
     return static_cast<T>(v);
   }
 
-  static __host__ __device__ bool needsAllBits() { return false; }
+  static bool needsAllBits() { return false; }
 };
 
-template <typename T> struct ValueTraitImpl<T, true> {
+template <typename T> struct ValueTraitImpl<T, true, false> {
 public:
   using UnsignedType = typename std::make_unsigned<T>::type;
 
-  static __host__ __device__ UnsignedType encode(T v) {
+  static UnsignedType encode(T v) {
     UnsignedType u = static_cast<UnsignedType>(v);
     return u ^ (UnsignedType(1) << (sizeof(T) * 8 - 1));
   }
 
-  static __host__ __device__ T decode(UnsignedType value) {
+  static T decode(UnsignedType value) {
     UnsignedType u = value ^ (UnsignedType(1) << (sizeof(T) * 8 - 1));
     return static_cast<T>(u);
   }
 
-  static __host__ __device__ T needsAllBits() {
+  static bool needsAllBits() {
+    return true; // Must process all bits for signed bits
+  }
+};
+
+template <typename T> struct ValueTraitImpl<T, true, true> {
+public:
+  using UnsignedType = typename std::conditional<
+    sizeof(T) == 4, uint32_t, 
+    typename std::conditional<sizeof(T) == 8, uint64_t, void>::type
+  >::type;
+
+  static UnsignedType encode(T v) {
+    // Reinterpret the floating point bits as unsigned integer
+    UnsignedType u;
+    
+    // Use union for type punning (safe in CUDA)
+    union {
+      T f;
+      UnsignedType u;
+    } converter;
+    
+    converter.f = v;
+    
+    if (converter.u & (UnsignedType(1) << (sizeof(T) * 8 - 1))) {
+      // Negative number: flip all bits
+      return ~converter.u;
+    } else {
+      // Positive number: flip the sign bit
+      return converter.u ^ (UnsignedType(1) << (sizeof(T) * 8 - 1));
+    }
+  }
+
+  static T decode(UnsignedType value) {
+    UnsignedType u;
+    
+    // Reverse the transformation
+    if (value & (UnsignedType(1) << (sizeof(T) * 8 - 1))) {
+      // Was positive: flip the sign bit back
+      u = value ^ (UnsignedType(1) << (sizeof(T) * 8 - 1));
+    } else {
+      // Was negative: flip all bits back
+      u = ~value;
+    }
+    
+    union {
+      T f;
+      UnsignedType u;
+    } converter;
+    
+    converter.u = u;
+    return converter.f;
+  }
+
+  static bool needsAllBits() {
     return true; // Must process all bits for signed bits
   }
 };
 
 template <typename T>
-struct ValueTraits : ValueTraitImpl<T, std::is_signed<T>::value> {};
+struct ValueTraits : ValueTraitImpl<T, std::is_signed<T>::value, std::is_floating_point<T>::value> {};
 
 template <typename T> class DeviceBuffer {
 private:
@@ -115,9 +169,6 @@ private:
   // Host buffers for encoding/decoding
   std::vector<UnsignedType> encoded_data_;
 
-  // Track which buffer contains final result
-  bool result_in_input_buffer_;
-
 public:
   RadixSorter(uint32_t N)
       : N_(N), num_blocks_((N + (B * Q) - 1) / (B * Q)),
@@ -149,7 +200,14 @@ public:
     d_inp_vals_.copyToDevice(encoded_data_.data());
 
     // Step 4: Execute sort passes
-    executeSortPasses();
+    UnsignedType *d_current_input = d_inp_vals_.get();
+    UnsignedType *d_current_output = d_out_vals_.get();
+
+    for (uint32_t pass = 0; pass < num_passes_; pass++) {
+      executeOnePass(d_current_input, d_current_output, pass);
+      // Swap pointers only (not the DeviceBuffer objects)
+      std::swap(d_current_input, d_current_output);
+    }
 
     // Step 5: Copy back and decode
     copyResultAndDecode(out_vals);
@@ -191,21 +249,11 @@ private:
     }
   }
 
-  void executeSortPasses() {
-    UnsignedType *d_current_input = d_inp_vals_.get();
-    UnsignedType *d_current_output = d_out_vals_.get();
-
-    for (uint32_t pass = 0; pass < num_passes_; pass++) {
-      executeOnePass(d_current_input, d_current_output, pass);
-      // Swap pointers only (not the DeviceBuffer objects)
-      std::swap(d_current_input, d_current_output);
-    }
-  }
-
-  void executeOnePass(UnsignedType *d_input, UnsignedType *d_output,
+  // TODO: This function where we should test the performance
+  void __inline__ executeOnePass(UnsignedType *d_input, UnsignedType *d_output,
                       uint32_t pass) {
     // Step 1: Build histogram
-    initial_kernel<H, lgH, Q>
+    initial_kernel<UnsignedType, H, lgH, Q>
         <<<num_blocks_, B>>>(d_input, d_hist_.get(), pass, N_);
     CUDASSERT(cudaPeekAtLastError());
     cudaDeviceSynchronize();
@@ -229,7 +277,7 @@ private:
     cudaDeviceSynchronize();
 
     // Step 5: Reorder elements
-    final_kernel<H, lgH, B, Q>
+    final_kernel<UnsignedType, H, lgH, B, Q>
         <<<num_blocks_, B, shared_mem_size_>>>(d_input, d_output, d_hist_.get(),
                                                d_hist_scan_tr_tr_.get(), pass,
                                                N_);
