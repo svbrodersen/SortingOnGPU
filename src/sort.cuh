@@ -14,13 +14,9 @@ template <typename T> struct ValueTraitImpl<T, false, false> {
 public:
   using UnsignedType = typename std::make_unsigned<T>::type;
 
-  static UnsignedType encode(T v) {
-    return static_cast<UnsignedType>(v);
-  }
+  static UnsignedType encode(T v) { return static_cast<UnsignedType>(v); }
 
-  static T decode(UnsignedType v) {
-    return static_cast<T>(v);
-  }
+  static T decode(UnsignedType v) { return static_cast<T>(v); }
 
   static bool needsAllBits() { return false; }
 };
@@ -47,22 +43,21 @@ public:
 template <typename T> struct ValueTraitImpl<T, true, true> {
 public:
   using UnsignedType = typename std::conditional<
-    sizeof(T) == 4, uint32_t, 
-    typename std::conditional<sizeof(T) == 8, uint64_t, void>::type
-  >::type;
+      sizeof(T) == 4, uint32_t,
+      typename std::conditional<sizeof(T) == 8, uint64_t, void>::type>::type;
 
   static UnsignedType encode(T v) {
     // Reinterpret the floating point bits as unsigned integer
     UnsignedType u;
-    
+
     // Use union for type punning (safe in CUDA)
     union {
       T f;
       UnsignedType u;
     } converter;
-    
+
     converter.f = v;
-    
+
     if (converter.u & (UnsignedType(1) << (sizeof(T) * 8 - 1))) {
       // Negative number: flip all bits
       return ~converter.u;
@@ -74,7 +69,7 @@ public:
 
   static T decode(UnsignedType value) {
     UnsignedType u;
-    
+
     // Reverse the transformation
     if (value & (UnsignedType(1) << (sizeof(T) * 8 - 1))) {
       // Was positive: flip the sign bit back
@@ -83,12 +78,12 @@ public:
       // Was negative: flip all bits back
       u = ~value;
     }
-    
+
     union {
       T f;
       UnsignedType u;
     } converter;
-    
+
     converter.u = u;
     return converter.f;
   }
@@ -99,7 +94,8 @@ public:
 };
 
 template <typename T>
-struct ValueTraits : ValueTraitImpl<T, std::is_signed<T>::value, std::is_floating_point<T>::value> {};
+struct ValueTraits : ValueTraitImpl<T, std::is_signed<T>::value,
+                                    std::is_floating_point<T>::value> {};
 
 template <typename T> class DeviceBuffer {
 private:
@@ -145,6 +141,9 @@ public:
   using Traits = ValueTraits<T>;
   using UnsignedType = typename Traits::UnsignedType;
 
+  // Check if we're dealing with unsigned integers
+  static constexpr bool IsUnsignedInt = std::is_unsigned<T>::value;
+
 private:
   static constexpr uint32_t H = (1 << lgH);
   uint32_t N_;
@@ -173,7 +172,7 @@ public:
   RadixSorter(uint32_t N)
       : N_(N), num_blocks_((N + (B * Q) - 1) / (B * Q)),
         hist_size_(num_blocks_ * (1 << lgH)),
-        shared_mem_size_((B*Q) * sizeof(UnsignedType) +
+        shared_mem_size_((B * Q) * sizeof(UnsignedType) +
                          (2 * H + B) * sizeof(uint32_t)),
         d_inp_vals_(N), d_out_vals_(N), d_hist_(hist_size_),
         d_hist_scan_(hist_size_), d_hist_scan_tr_tr_(hist_size_),
@@ -186,95 +185,77 @@ public:
     grid_backward_ = dim3(dimy, dimx, 1);
 
     // Pre-allocate encoding buffer
-    encoded_data_.resize(N);
+    if constexpr (!IsUnsignedInt) {
+      encoded_data_.resize(N);
+    }
   }
 
   int sort(const T *inp_vals, T *out_vals) {
-    // Step 1: Encode input
-    encodeInput(inp_vals);
+    if constexpr (IsUnsignedInt) {
+      // Direct path for unsigned integers
+      d_inp_vals_.copyToDevice(
+          reinterpret_cast<const UnsignedType *>(inp_vals));
+      num_passes_ = calculateNumPasses(inp_vals);
 
-    // Step 2: Calculate number of passes
-    num_passes_ = calculateNumPasses(inp_vals);
+      UnsignedType *d_current_input = d_inp_vals_.get();
+      UnsignedType *d_current_output = d_out_vals_.get();
 
-    // Step 3: Copy to device
-    d_inp_vals_.copyToDevice(encoded_data_.data());
+      for (uint32_t pass = 0; pass < num_passes_; pass++) {
+        executeOnePass(d_current_input, d_current_output, pass);
+        std::swap(d_current_input, d_current_output);
+      }
 
-    // Step 4: Execute sort passes
-    UnsignedType *d_current_input = d_inp_vals_.get();
-    UnsignedType *d_current_output = d_out_vals_.get();
+      d_inp_vals_.copyToHost(reinterpret_cast<UnsignedType *>(out_vals));
+    } else {
+      // Original path with encoding/decoding
+      encodeInput(inp_vals);
+      d_inp_vals_.copyToDevice(encoded_data_);
+      num_passes_ = calculateNumPasses(inp_vals);
 
-    for (uint32_t pass = 0; pass < num_passes_; pass++) {
-      executeOnePass(d_current_input, d_current_output, pass);
-      // Swap pointers only (not the DeviceBuffer objects)
-      std::swap(d_current_input, d_current_output);
+      UnsignedType *d_current_input = d_inp_vals_.get();
+      UnsignedType *d_current_output = d_out_vals_.get();
+
+      for (uint32_t pass = 0; pass < num_passes_; pass++) {
+        executeOnePass(d_current_input, d_current_output, pass);
+        std::swap(d_current_input, d_current_output);
+      }
+
+      copyResultAndDecode(out_vals);
     }
-
-    // Step 5: Copy back and decode
-    copyResultAndDecode(out_vals);
-
     return 0;
   }
 
 private:
   void encodeInput(const T *inp_vals) {
+    if constexpr (!IsUnsignedInt) {
     for (uint32_t i = 0; i < N_; i++) {
       encoded_data_[i] = Traits::encode(inp_vals[i]);
+    }
     }
   }
 
   uint32_t calculateNumPasses(const T *inp_vals) {
     // Check if we need all bits or can optimize
-    if (Traits::needsAllBits()) {
-      return (sizeof(T) * 8 + lgH - 1) / lgH;
-    } else {
-      // For unsigned, find the largest value
-      UnsignedType max_val = 0;
-      for (uint32_t i = 0; i < N_; i++) {
-        UnsignedType encoded = Traits::encode(inp_vals[i]);
-        if (encoded > max_val) {
-          max_val = encoded;
-        }
-      }
-
-      if (max_val == 0)
-        return 1;
-
-      // Find highest bit position
-      uint32_t highest_bit = sizeof(UnsignedType) * 8 - 1;
-      while (highest_bit > 0 && !((max_val >> highest_bit) & 1)) {
-        highest_bit--;
-      }
-
-      return (highest_bit / lgH) + 1;
-    }
+    return (sizeof(T) * 8 + lgH - 1) / lgH;
   }
 
-  // TODO: This function where we should test the performance
   void __inline__ executeOnePass(UnsignedType *d_input, UnsignedType *d_output,
-                      uint32_t pass) {
+                                 uint32_t pass) {
     // Step 1: Build histogram
     initial_kernel<UnsignedType, H, lgH, Q>
         <<<num_blocks_, B>>>(d_input, d_hist_.get(), pass, N_);
-    CUDASSERT(cudaPeekAtLastError());
-    cudaDeviceSynchronize();
 
     // Step 2: Transpose histogram (num_blocks × H -> H × num_blocks)
     transpose<TILE_SIZE><<<grid_forward_, block_>>>(
         d_hist_.get(), d_hist_scan_.get(), num_blocks_, H);
-    CUDASSERT(cudaPeekAtLastError());
-    cudaDeviceSynchronize();
 
     // Step 3: Scan histogram
     scanInc<Add<uint32_t>>(B, hist_size_, d_hist_scan_.get(),
                            d_hist_scan_.get(), d_tmp_vals_.get());
-    CUDASSERT(cudaPeekAtLastError());
-    cudaDeviceSynchronize();
 
     // Step 4: Transpose back (H × num_blocks -> num_blocks × H)
     transpose<TILE_SIZE><<<grid_backward_, block_>>>(
         d_hist_scan_.get(), d_hist_scan_tr_tr_.get(), H, num_blocks_);
-    CUDASSERT(cudaPeekAtLastError());
-    cudaDeviceSynchronize();
 
     // Step 5: Reorder elements
     final_kernel<UnsignedType, H, lgH, B, Q>
@@ -286,9 +267,11 @@ private:
   }
 
   void copyResultAndDecode(T *out_vals) {
-    d_inp_vals_.copyToHost(encoded_data_.data());
-    for (uint32_t i = 0; i < N_; i++) {
-      out_vals[i] = Traits::decode(encoded_data_[i]);
+    if constexpr (!IsUnsignedInt) {
+      d_inp_vals_.copyToHost(encoded_data_.data());
+      for (uint32_t i = 0; i < N_; i++) {
+        out_vals[i] = Traits::decode(encoded_data_[i]);
+      }
     }
   }
 };
@@ -298,4 +281,3 @@ int radixSort(T *inp_vals, T *out_vals, uint32_t N) {
   RadixSorter<T, Q, B, lgH, TILE_SIZE> sorter(N);
   return sorter.sort(inp_vals, out_vals);
 }
-

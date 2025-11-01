@@ -18,7 +18,7 @@ $(MAIN_TEST): radix_test.cu host_skel.cuh pbb_kernels.cuh kernels.cuh sort.cuh
 	$(COMPILER) $(OPT_FLAGS) -DELEMS_PER_THREAD=$(ELEMS_PER_THREAD) -o $(MAIN_TEST) $< 
 
 run: $(MAIN)
-	./main
+	./main 10000000
 
 test: $(MAIN_TEST)
 	./radix_test
