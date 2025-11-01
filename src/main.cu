@@ -8,7 +8,7 @@
 #include "sort.cuh"
 #include <iostream>
 
-using T = float_t;
+using T = double;
 
 void printArray(T *inp_vals, uint32_t N, const char *name) {
   std::cout << name << "[:" << N << "] = [";

@@ -89,6 +89,8 @@ template <typename T> bool runTest(uint32_t N) {
   const char* type_name = std::is_same_v<T, uint32_t> ? "uint32_t" :
                           std::is_same_v<T, int32_t>  ? "int32_t"  :
                           std::is_same_v<T, float>    ? "float"    :
+                          std::is_same_v<T, double>    ? "double"    :
+                          std::is_same_v<T, uint64_t>    ? "uint64_t"    :
                           "unknown";
 
   // 1. Define constants (same for both types, assuming 32-bit key)
@@ -129,18 +131,18 @@ template <typename T> bool runTest(uint32_t N) {
     inp_vals[4] = 100;
     inp_vals[5] = 100;
 
-    if constexpr (std::is_same_v<T, uint32_t>) {
-      inp_vals[1] = UINT32_MAX;
-      inp_vals[3] = UINT32_MAX;
+    if constexpr (std::is_same_v<T, uint32_t> || std::is_same_v<T, uint64_t>) {
+      inp_vals[1] = std::numeric_limits<T>::max();
+      inp_vals[3] = std::numeric_limits<T>::max();
     } else if constexpr (std::is_same_v<T, int32_t>) { // int32_t
-      inp_vals[1] = INT32_MIN;
-      inp_vals[3] = INT32_MAX;
+      inp_vals[1] = std::numeric_limits<T>::max();
+      inp_vals[3] = std::numeric_limits<T>::max();
       // Add a negative number
       if (N > 6)
         inp_vals[6] = -1;
       if (N > 7)
         inp_vals[7] = -100;
-    } else if constexpr (std::is_same_v<T, int32_t>) { // int32_t
+    } else if constexpr (std::is_same_v<T, float_t> || std::is_same_v<T, double>) { // int32_t
       inp_vals[N-20] = (T) -1000;
       inp_vals[N-N%30] = (T) -1337;
       inp_vals[N-N%20] = (T) -1555;
@@ -208,7 +210,7 @@ template <typename T> bool runTest(uint32_t N) {
 }
 
 template <typename T>
-int runAllTests(const char *type_name, int *test_sizes, int N) {
+int runAllTests(int *test_sizes, int N) {
   // Define a set of test sizes
   int tests_passed = 0;
 
@@ -234,21 +236,29 @@ int main() {
   int total_passed = 0;
 
   // 1. Run tests for uint32_t
-  int uint32_tests_passed = runAllTests<uint32_t>("uint32_t", test_sizes, N);
+  int uint32_tests_passed = runAllTests<uint32_t>(test_sizes, N);
 
   // 2. Run tests for int32_t
-  int int32_tests_passed = runAllTests<int32_t>("int32_t", test_sizes, N);
+  int int32_tests_passed = runAllTests<int32_t>( test_sizes, N);
 
   // 3. Run tests for float
-  int float_tests_passed = runAllTests<float_t>("float_t", test_sizes, N);
+  int float_tests_passed = runAllTests<float_t>( test_sizes, N);
 
-  total_passed = uint32_tests_passed + int32_tests_passed + float_tests_passed;
-  total_tests = 3 * N;
+
+  int double_tests_passed = runAllTests<double>( test_sizes, N);
+
+  int uint64_test_passed = runAllTests<uint64_t>( test_sizes, N);
+
+  total_passed = uint32_tests_passed + int32_tests_passed + float_tests_passed
+    + double_tests_passed + uint64_test_passed;
+  total_tests = 5 * N;
 
   printf("\n\n====== FINAL TEST SUMMARY ======\n");
   printf("uint32_t tests: Passed %d/%d\n", uint32_tests_passed, N);
   printf("int32_t tests:  Passed %d/%d\n", int32_tests_passed, N);
   printf("float_t tests:  Passed %d/%d\n", float_tests_passed, N);
+  printf("double tests:  Passed %d/%d\n", double_tests_passed, N);
+  printf("uint64 tests:  Passed %d/%d\n", uint64_test_passed, N);
   printf("------------------------------------------------------\n");
   printf("**Total Tests: Passed %d out of %d tests.**\n", total_passed,
          total_tests);
