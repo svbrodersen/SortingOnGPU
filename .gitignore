@@ -5,4 +5,5 @@
 *.exe
 *.ptx
 src/main
+src/radix_test
 src/test_correctness
