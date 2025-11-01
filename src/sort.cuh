@@ -89,9 +89,11 @@ int radixSort(uint32_t *inp_vals, uint32_t *out_vals, uint32_t N) {
   cudaMemcpy(out_vals, d_inp_vals, mem_size, cudaMemcpyDeviceToHost);
 
   cudaFree(d_inp_vals);
+  cudaFree(d_hist_scan_tr_tr);
   cudaFree(d_out_vals);
   cudaFree(d_hist);
   cudaFree(d_tmp_vals);
+  cudaFree(d_hist_scan);
 
   return 0;
 }

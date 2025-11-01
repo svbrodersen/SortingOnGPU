@@ -26,6 +26,7 @@ void printDeviceArray(uint32_t *inp_vals, int mem_size, uint32_t N,
 
 int main() {
   initHwd();
+  cudaSetDevice(1);
   const uint32_t Q = 22;
   const uint32_t B = 256;
   const uint32_t lgH = 8;
