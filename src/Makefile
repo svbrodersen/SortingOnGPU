@@ -1,5 +1,5 @@
 COMPILER?=nvcc
-OPT_FLAGS?=-O3
+OPT_FLAGS?=-O3 -std=c++17
 
 ELEMS_PER_THREAD=24
 

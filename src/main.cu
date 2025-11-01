@@ -45,7 +45,7 @@ int main() {
 
   uint32_t *out_vals = (uint32_t *)malloc(mem_size);
 
-  if (radixSort<Q, B, lgH, TILE_SIZE>(inp_vals, out_vals, N) == 0) {
+  if (radixSort<uint32_t, Q, B, lgH, TILE_SIZE>(inp_vals, out_vals, N) == 0) {
     printArray(out_vals, 100, "out_vals");
 
     // Simple verification that items are sorted

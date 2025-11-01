@@ -1,99 +1,253 @@
 #include "host_skel.cuh"
 #include "kernels.cuh"
+#include <cstddef>
 #include <cstdint>
 #include <cuda_runtime.h>
 #include <stdlib.h>
 #include <sys/types.h>
+#include <type_traits>
+#include <vector>
 
-template<uint32_t Q, uint32_t B, uint32_t lgH, uint32_t TILE_SIZE>
-int radixSort(uint32_t *inp_vals, uint32_t *out_vals, uint32_t N) {
-  const uint32_t H = (1 << lgH);
-  const uint32_t mem_size = N * sizeof(uint32_t);
+template <typename T, bool IsSigned> struct ValueTraitImpl;
 
-  const uint32_t num_blocks = (N + (B * Q) - 1) / (B * Q);
-  const uint32_t hist_size = num_blocks * H;
-  const uint32_t hist_mem_size = hist_size * sizeof(uint32_t);
+template <typename T> struct ValueTraitImpl<T, false> {
+public:
+  using UnsignedType = typename std::make_unsigned<T>::type;
 
-  // Dimensions
-  const int dimy = (num_blocks + TILE_SIZE - 1) / TILE_SIZE;
-  const int dimx = (H + TILE_SIZE - 1) / TILE_SIZE;
-  dim3 block(TILE_SIZE, TILE_SIZE, 1);
-  dim3 grid_forward(dimx, dimy, 1);
-  dim3 grid_backward(dimy, dimx, 1);
+  static __host__ __device__ UnsignedType encode(T v) {
+    return static_cast<UnsignedType>(v);
+  }
 
-  uint32_t *d_inp_vals;
-  uint32_t *d_out_vals;
-  cudaMalloc((void **)&d_inp_vals, mem_size);
-  cudaMemcpy(d_inp_vals, inp_vals, mem_size, cudaMemcpyHostToDevice);
+  static __host__ __device__ T decode(UnsignedType v) {
+    return static_cast<T>(v);
+  }
 
-  // Allocate device output
-  cudaMalloc((void **)&d_out_vals, mem_size);
+  static __host__ __device__ bool needsAllBits() { return false; }
+};
 
-  uint32_t *d_hist_scan;
-  cudaMalloc((void **)&d_hist_scan, hist_mem_size);
+template <typename T> struct ValueTraitImpl<T, true> {
+public:
+  using UnsignedType = typename std::make_unsigned<T>::type;
 
-  uint32_t *d_hist_scan_tr_tr;
-  cudaMalloc((void **)&d_hist_scan_tr_tr, hist_mem_size);
+  static __host__ __device__ UnsignedType encode(T v) {
+    UnsignedType u = static_cast<UnsignedType>(v);
+    return u ^ (UnsignedType(1) << (sizeof(T) * 8 - 1));
+  }
 
-  uint32_t *d_hist;
-  cudaMalloc((void **)&d_hist, hist_mem_size);
+  static __host__ __device__ T decode(UnsignedType value) {
+    UnsignedType u = value ^ (UnsignedType(1) << (sizeof(T) * 8 - 1));
+    return static_cast<T>(u);
+  }
 
-  uint32_t *d_tmp_vals;
-  cudaMalloc((void **)&d_tmp_vals, hist_size * sizeof(uint32_t));
+  static __host__ __device__ T needsAllBits() {
+    return true; // Must process all bits for signed bits
+  }
+};
 
-  // TODO: This is where you should start the test for GFLOPS GB/S. Both have their merit.
+template <typename T>
+struct ValueTraits : ValueTraitImpl<T, std::is_signed<T>::value> {};
 
-  uint32_t largest_shift;
-  {
-    uint32_t largest_val = 0;
-    for (int i = 0; i < N; i++) {
-      if (inp_vals[i] > largest_val) {
-        largest_val = inp_vals[i];
-      }
+template <typename T> class DeviceBuffer {
+private:
+  T *ptr_;
+  size_t size_;
+
+public:
+  DeviceBuffer(size_t count) : size_(count) {
+    cudaMalloc((void **)&ptr_, count * sizeof(T));
+  }
+
+  ~DeviceBuffer() {
+    if (ptr_)
+      cudaFree(ptr_);
+  }
+
+  // No copy
+  DeviceBuffer(const DeviceBuffer &) = delete;
+  DeviceBuffer &operator=(const DeviceBuffer &) = delete;
+
+  // Move semantics
+  DeviceBuffer(DeviceBuffer &&other) noexcept
+      : ptr_(other.ptr_), size_(other.size_) {
+    other.ptr_ = nullptr;
+  }
+
+  T *get() { return ptr_; }
+  const T *get() const { return ptr_; }
+  size_t size() const { return size_; }
+
+  void copyToDevice(const T *host_data) {
+    cudaMemcpy(ptr_, host_data, size_ * sizeof(T), cudaMemcpyHostToDevice);
+  }
+
+  void copyToHost(T *host_data) const {
+    cudaMemcpy(host_data, ptr_, size_ * sizeof(T), cudaMemcpyDeviceToHost);
+  }
+};
+
+template <typename T, uint32_t Q, uint32_t B, uint32_t lgH, uint32_t TILE_SIZE>
+class RadixSorter {
+public:
+  using Traits = ValueTraits<T>;
+  using UnsignedType = typename Traits::UnsignedType;
+
+private:
+  static constexpr uint32_t H = (1 << lgH);
+  uint32_t N_;
+  uint32_t num_blocks_;
+  uint32_t hist_size_;
+  uint32_t num_passes_;
+  size_t shared_mem_size_;
+
+  // Grid dimensions
+  dim3 block_;
+  dim3 grid_forward_;
+  dim3 grid_backward_;
+
+  // Device buffers
+  DeviceBuffer<UnsignedType> d_inp_vals_;
+  DeviceBuffer<UnsignedType> d_out_vals_;
+  DeviceBuffer<uint32_t> d_hist_;
+  DeviceBuffer<uint32_t> d_hist_scan_;
+  DeviceBuffer<uint32_t> d_hist_scan_tr_tr_;
+  DeviceBuffer<uint32_t> d_tmp_vals_;
+
+  // Host buffers for encoding/decoding
+  std::vector<UnsignedType> encoded_data_;
+
+  // Track which buffer contains final result
+  bool result_in_input_buffer_;
+
+public:
+  RadixSorter(uint32_t N)
+      : N_(N), num_blocks_((N + (B * Q) - 1) / (B * Q)),
+        hist_size_(num_blocks_ * (1 << lgH)),
+        shared_mem_size_((B*Q) * sizeof(UnsignedType) +
+                         (2 * H + B) * sizeof(uint32_t)),
+        d_inp_vals_(N), d_out_vals_(N), d_hist_(hist_size_),
+        d_hist_scan_(hist_size_), d_hist_scan_tr_tr_(hist_size_),
+        d_tmp_vals_(hist_size_) {
+    // Setup grid dimensions
+    const int dimy = (num_blocks_ + TILE_SIZE - 1) / TILE_SIZE;
+    const int dimx = (H + TILE_SIZE - 1) / TILE_SIZE;
+    block_ = dim3(TILE_SIZE, TILE_SIZE, 1);
+    grid_forward_ = dim3(dimx, dimy, 1);
+    grid_backward_ = dim3(dimy, dimx, 1);
+
+    // Pre-allocate encoding buffer
+    encoded_data_.resize(N);
+  }
+
+  int sort(const T *inp_vals, T *out_vals) {
+    // Step 1: Encode input
+    encodeInput(inp_vals);
+
+    // Step 2: Calculate number of passes
+    num_passes_ = calculateNumPasses(inp_vals);
+
+    // Step 3: Copy to device
+    d_inp_vals_.copyToDevice(encoded_data_.data());
+
+    // Step 4: Execute sort passes
+    executeSortPasses();
+
+    // Step 5: Copy back and decode
+    copyResultAndDecode(out_vals);
+
+    return 0;
+  }
+
+private:
+  void encodeInput(const T *inp_vals) {
+    for (uint32_t i = 0; i < N_; i++) {
+      encoded_data_[i] = Traits::encode(inp_vals[i]);
     }
-    uint32_t largest_bit_pos =
-        (largest_val == 0) ? 0u : (31 - __builtin_clz(largest_val));
-    largest_shift = largest_bit_pos / lgH + 1;
   }
 
-  for (uint32_t current_shift = 0u; current_shift < largest_shift;
-       current_shift++) {
+  uint32_t calculateNumPasses(const T *inp_vals) {
+    // Check if we need all bits or can optimize
+    if (Traits::needsAllBits()) {
+      return (sizeof(T) * 8 + lgH - 1) / lgH;
+    } else {
+      // For unsigned, find the largest value
+      UnsignedType max_val = 0;
+      for (uint32_t i = 0; i < N_; i++) {
+        UnsignedType encoded = Traits::encode(inp_vals[i]);
+        if (encoded > max_val) {
+          max_val = encoded;
+        }
+      }
+
+      if (max_val == 0)
+        return 1;
+
+      // Find highest bit position
+      uint32_t highest_bit = sizeof(UnsignedType) * 8 - 1;
+      while (highest_bit > 0 && !((max_val >> highest_bit) & 1)) {
+        highest_bit--;
+      }
+
+      return (highest_bit / lgH) + 1;
+    }
+  }
+
+  void executeSortPasses() {
+    UnsignedType *d_current_input = d_inp_vals_.get();
+    UnsignedType *d_current_output = d_out_vals_.get();
+
+    for (uint32_t pass = 0; pass < num_passes_; pass++) {
+      executeOnePass(d_current_input, d_current_output, pass);
+      // Swap pointers only (not the DeviceBuffer objects)
+      std::swap(d_current_input, d_current_output);
+    }
+  }
+
+  void executeOnePass(UnsignedType *d_input, UnsignedType *d_output,
+                      uint32_t pass) {
+    // Step 1: Build histogram
     initial_kernel<H, lgH, Q>
-        <<<num_blocks, B>>>(d_inp_vals, d_hist, current_shift, N);
+        <<<num_blocks_, B>>>(d_input, d_hist_.get(), pass, N_);
     CUDASSERT(cudaPeekAtLastError());
     cudaDeviceSynchronize();
 
-    // d_hist should be size num_blocks X H, want H x num_blocks
-    transpose<TILE_SIZE><<<grid_forward, block>>>(d_hist, d_hist_scan, num_blocks, H);
+    // Step 2: Transpose histogram (num_blocks × H -> H × num_blocks)
+    transpose<TILE_SIZE><<<grid_forward_, block_>>>(
+        d_hist_.get(), d_hist_scan_.get(), num_blocks_, H);
     CUDASSERT(cudaPeekAtLastError());
     cudaDeviceSynchronize();
 
-    // Allocate temporary arrays for scanInc
-    scanInc<Add<uint32_t>>(B, hist_size, d_hist_scan, d_hist_scan, d_tmp_vals);
+    // Step 3: Scan histogram
+    scanInc<Add<uint32_t>>(B, hist_size_, d_hist_scan_.get(),
+                           d_hist_scan_.get(), d_tmp_vals_.get());
     CUDASSERT(cudaPeekAtLastError());
     cudaDeviceSynchronize();
 
-
-    transpose<TILE_SIZE><<<grid_backward, block>>>(d_hist_scan, d_hist_scan_tr_tr, H, num_blocks);
-
-    const uint32_t shared_mem_size = (B * Q + H + H + B) * sizeof(uint32_t);
-    final_kernel<H, lgH, B, Q><<<num_blocks, B, shared_mem_size>>>(
-        d_inp_vals, d_out_vals, d_hist, d_hist_scan_tr_tr, current_shift, N);
+    // Step 4: Transpose back (H × num_blocks -> num_blocks × H)
+    transpose<TILE_SIZE><<<grid_backward_, block_>>>(
+        d_hist_scan_.get(), d_hist_scan_tr_tr_.get(), H, num_blocks_);
     CUDASSERT(cudaPeekAtLastError());
     cudaDeviceSynchronize();
 
-     std::swap(d_inp_vals, d_out_vals);
+    // Step 5: Reorder elements
+    final_kernel<H, lgH, B, Q>
+        <<<num_blocks_, B, shared_mem_size_>>>(d_input, d_output, d_hist_.get(),
+                                               d_hist_scan_tr_tr_.get(), pass,
+                                               N_);
+    CUDASSERT(cudaPeekAtLastError());
+    cudaDeviceSynchronize();
   }
 
-  // Copy result back to host (assuming this is the only pass for demonstration)
-  cudaMemcpy(out_vals, d_inp_vals, mem_size, cudaMemcpyDeviceToHost);
+  void copyResultAndDecode(T *out_vals) {
+    d_inp_vals_.copyToHost(encoded_data_.data());
+    for (uint32_t i = 0; i < N_; i++) {
+      out_vals[i] = Traits::decode(encoded_data_[i]);
+    }
+  }
+};
 
-  cudaFree(d_inp_vals);
-  cudaFree(d_hist_scan_tr_tr);
-  cudaFree(d_out_vals);
-  cudaFree(d_hist);
-  cudaFree(d_tmp_vals);
-  cudaFree(d_hist_scan);
-
-  return 0;
+template <typename T, uint32_t Q, uint32_t B, uint32_t lgH, uint32_t TILE_SIZE>
+int radixSort(T *inp_vals, T *out_vals, uint32_t N) {
+  RadixSorter<T, Q, B, lgH, TILE_SIZE> sorter(N);
+  return sorter.sort(inp_vals, out_vals);
 }
+
