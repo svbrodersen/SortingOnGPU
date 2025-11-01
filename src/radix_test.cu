@@ -3,31 +3,24 @@
 #include <cstdint>
 #include <cstdio>
 #include <cuda_runtime.h>
+#include <limits>
 #include <map> // For frequency check
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h> // For memcpy
 #include <sys/types.h>
+#include <iostream>
 
-template <typename T>
+template<typename T>
 void printArray(T *inp_vals, uint32_t N, const char *name) {
-  printf("%s[:%u] = [", name, N);
+  std::cout << name << "[:" << N << "] = [";
   for (uint32_t i = 0; i < N; i++) {
-    if (i == N - 1) {
-      // Use appropriate format specifier: %u for unsigned, %d for signed
-      if constexpr (std::is_same_v<T, uint32_t>) {
-        printf("%u]\n", inp_vals[i]);
-      } else {
-        printf("%d]\n", inp_vals[i]);
-      }
-    } else {
-      if constexpr (std::is_same_v<T, uint32_t>) {
-        printf("%u, ", inp_vals[i]);
-      } else {
-        printf("%d, ", inp_vals[i]);
-      }
+    std::cout << inp_vals[i];
+    if (i < N - 1) {
+      std::cout << ", ";
     }
   }
+  std::cout << "]\n";
 }
 
 template <typename T>
@@ -93,7 +86,10 @@ bool checkElementPreservation(T *original, T *sorted, uint32_t N) {
  */
 template <typename T> bool runTest(uint32_t N) {
   // Determine the type name for clearer output
-  const char *type_name = std::is_same_v<T, uint32_t> ? "uint32_t" : "int32_t";
+  const char* type_name = std::is_same_v<T, uint32_t> ? "uint32_t" :
+                          std::is_same_v<T, int32_t>  ? "int32_t"  :
+                          std::is_same_v<T, float>    ? "float"    :
+                          "unknown";
 
   // 1. Define constants (same for both types, assuming 32-bit key)
   const uint32_t Q = 22;
@@ -122,8 +118,8 @@ template <typename T> bool runTest(uint32_t N) {
 
   // 3. Fill with random data
   for (uint32_t i = 0; i < N; i++) {
-    // rand() returns an int, cast it to T
-    inp_vals[i] = (T)rand();
+    // In reverse order, 
+    inp_vals[i] = N - 50 - i;
   }
 
   // Add some edge cases based on the type
@@ -136,7 +132,7 @@ template <typename T> bool runTest(uint32_t N) {
     if constexpr (std::is_same_v<T, uint32_t>) {
       inp_vals[1] = UINT32_MAX;
       inp_vals[3] = UINT32_MAX;
-    } else { // int32_t
+    } else if constexpr (std::is_same_v<T, int32_t>) { // int32_t
       inp_vals[1] = INT32_MIN;
       inp_vals[3] = INT32_MAX;
       // Add a negative number
@@ -144,6 +140,11 @@ template <typename T> bool runTest(uint32_t N) {
         inp_vals[6] = -1;
       if (N > 7)
         inp_vals[7] = -100;
+    } else if constexpr (std::is_same_v<T, int32_t>) { // int32_t
+      inp_vals[N-20] = (T) -1000;
+      inp_vals[N-N%30] = (T) -1337;
+      inp_vals[N-N%20] = (T) -1555;
+      inp_vals[N - (N/2)] = std::numeric_limits<T>::max();
     }
   }
 
@@ -176,7 +177,7 @@ template <typename T> bool runTest(uint32_t N) {
         printf("... Context ...\n");
         uint32_t start = (i > 5) ? (i - 5) : 0;
         uint32_t end = (i + 5 < N) ? (i + 5) : N;
-        printArray(out_vals + start, end - start, "out_vals");
+        printArray<T>(out_vals + start, end - start, "out_vals");
         printf("... End Context ...\n");
 
         break;
@@ -238,14 +239,13 @@ int main() {
   // 2. Run tests for int32_t
   int int32_tests_passed = runAllTests<int32_t>("int32_t", test_sizes, N);
 
-
   // 3. Run tests for float
   int float_tests_passed = runAllTests<float_t>("float_t", test_sizes, N);
 
-  total_passed = uint32_tests_passed + int32_tests_passed;
-  total_tests = 2 * N;
+  total_passed = uint32_tests_passed + int32_tests_passed + float_tests_passed;
+  total_tests = 3 * N;
 
-  printf("\n\n====== FINAL TEST SUMMARY (uint32_t + int32_t) ======\n");
+  printf("\n\n====== FINAL TEST SUMMARY ======\n");
   printf("uint32_t tests: Passed %d/%d\n", uint32_tests_passed, N);
   printf("int32_t tests:  Passed %d/%d\n", int32_tests_passed, N);
   printf("float_t tests:  Passed %d/%d\n", float_tests_passed, N);

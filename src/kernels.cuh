@@ -39,20 +39,20 @@ __global__ void initial_kernel(UnsignedType *inp_vals, uint32_t *hist,
   return;
 }
 
-template <int T>
+template <int TILE_SIZE>
 __global__ void transpose(uint32_t *hist, uint32_t *hist_tr, int N, int M) {
-  __shared__ uint32_t tile[T][T + 1];
+  __shared__ uint32_t tile[TILE_SIZE][TILE_SIZE + 1];
 
-  int x = blockIdx.x * T + threadIdx.x;
-  int y = blockIdx.y * T + threadIdx.y;
+  int x = blockIdx.x * TILE_SIZE + threadIdx.x;
+  int y = blockIdx.y * TILE_SIZE + threadIdx.y;
 
   if (x < M && y < N)
     tile[threadIdx.y][threadIdx.x] = hist[y * M + x];
 
   __syncthreads();
 
-  x = blockIdx.y * T + threadIdx.x;
-  y = blockIdx.x * T + threadIdx.y;
+  x = blockIdx.y * TILE_SIZE + threadIdx.x;
+  y = blockIdx.x * TILE_SIZE + threadIdx.y;
 
   if (x < N && y < M)
     hist_tr[y * N + x] = tile[threadIdx.x][threadIdx.y];

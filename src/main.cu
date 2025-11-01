@@ -6,9 +6,9 @@
 #include <stdlib.h>
 #include <sys/types.h>
 #include "sort.cuh"
-#include<iostream>
+#include <iostream>
 
-using T = uint64_t;
+using T = float_t;
 
 void printArray(T *inp_vals, uint32_t N, const char *name) {
   std::cout << name << "[:" << N << "] = [";
@@ -42,7 +42,7 @@ int main() {
 
   T *inp_vals = (T *)malloc(mem_size);
   for (int i = 0; i < N; i++) {
-    inp_vals[i] = (T)N-i-1;
+    inp_vals[i] = (T)N-20.5-i;
   }
 
   // printArray(inp_vals, 10, "inp_vals");
