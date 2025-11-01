@@ -58,214 +58,143 @@ __global__ void transpose(uint32_t *hist, uint32_t *hist_tr, int N, int M) {
     hist_tr[y * N + x] = tile[threadIdx.x][threadIdx.y];
 }
 
-/* Kernel 2: per-block lgH-bit pass + global scatter */
-template<uint32_t H, uint32_t lgH>
-__global__ void final_kernel(const uint32_t* __restrict__ inp_vals,
-                             uint32_t* __restrict__ out_vals,
-                             const uint32_t* __restrict__ hist,
-                             const uint32_t* __restrict__ scanned_hist,
-                             uint32_t current_shift,
-                             uint32_t Q) {
-  const uint32_t B = blockDim.x;
-  const uint32_t tileStart = blockIdx.x * (B * Q);
-  const uint32_t bitBase = current_shift * lgH;
+template <typename UnsignedType, uint32_t B, uint32_t Q>
+__device__ void partition2_by_bit(UnsignedType *s_inp, UnsignedType reg_mem[Q],
+                                  uint32_t current_bit,
+                                  uint32_t *s_scan_storage, bool is_last) {
+  uint32_t thid = threadIdx.x;
+  uint32_t S = 0;
 
-  extern __shared__ uint32_t smem[];
-  uint32_t* s_data   = smem;                   // [B*Q]
-  uint32_t* s_cnt    = s_data   + B*Q;         // [B]
-  uint32_t* s_scanB  = s_cnt    + B;           // [B]    (thread-count scan)
-  uint32_t* s_bins   = s_scanB  + B;           // [H]    (original per-bin counts)
-  uint32_t* s_scanH  = s_bins   + H;           // [H]    (histogram scan workspace)
-  uint32_t* s_binsG  = s_scanH  + H;           // [H]    (global starts from scanned_hist)
-
-  const uint32_t tid  = threadIdx.x;
-  const uint32_t base = tileStart + tid;
-
-  uint32_t regs[32];
 #pragma unroll
-  for (uint32_t i = 0; i < 32; ++i)
-    if (i < Q) regs[i] = inp_vals[base + i * B];
+  for (int q = 0; q < Q; q++) {
+    UnsignedType elm = reg_mem[q];
+    uint32_t bit_is_0 = 1u - ((elm >> current_bit) & 1u);
+    S += bit_is_0;
+  }
+  s_scan_storage[thid] = S;
+
   __syncthreads();
 
-#pragma unroll
-  for (uint32_t k = 0; k < lgH; ++k) {
-    const uint32_t b = bitBase + k;
-
-    uint32_t z = 0;
-#pragma unroll
-    for (uint32_t i = 0; i < 32; ++i)
-      if (i < Q) z += (((regs[i] >> b) & 1u) == 0u);
-    s_cnt[tid] = z;
-    __syncthreads();
-
-    // scan over B threads
-    s_scanB[tid] = s_cnt[tid];
-    __syncthreads();
-    for (uint32_t off = 1; off < B; off <<= 1) {
-      uint32_t add = (tid >= off) ? s_scanB[tid - off] : 0u;
-      __syncthreads();
-      s_scanB[tid] += add;
-      __syncthreads();
-    }
-    const uint32_t totalZ = s_scanB[B - 1];
-    const uint32_t zEx    = (tid == 0) ? 0u : s_scanB[tid - 1];
-    const uint32_t oEx    = tid * Q - zEx;
-
-    uint32_t lz = 0, lo = 0;
-#pragma unroll
-    for (uint32_t i = 0; i < 32; ++i) {
-      if (i < Q) {
-        const uint32_t v = regs[i];
-        if (((v >> b) & 1u) == 0u) s_data[zEx + lz++] = v;
-        else                       s_data[totalZ + oEx + lo++] = v;
-      }
-    }
-    __syncthreads();
-
-    const uint32_t slice = tid * Q;
-#pragma unroll
-    for (uint32_t i = 0; i < 32; ++i)
-      if (i < Q) regs[i] = s_data[slice + i];
-    __syncthreads();
-  }
-
-  // load per-bin counts for this block and global (scanned) starts
-  for (uint32_t j = tid; j < H; j += B) {
-    s_bins[j]  = hist[blockIdx.x * H + j];
-    s_binsG[j] = scanned_hist[blockIdx.x * H + j];
-  }
+  // inclusive scatter
+  uint32_t res = scanIncBlock<Add<uint32_t>>(s_scan_storage, thid);
   __syncthreads();
+  s_scan_storage[thid] = res;
+  __syncthreads();
+  uint32_t total_zeros = s_scan_storage[B - 1];
 
-  // exclusive scan over H bins -> local starts (use s_scanH as workspace)
-  if (tid == 0) {
-    uint32_t acc = 0;
-    for (uint32_t j = 0; j < H; ++j) {
-      uint32_t c = s_bins[j];
-      s_bins[j] = acc;
-      acc += c;
+
+  // Scatter into shared array.
+  uint32_t count_zero = 0;
+  uint32_t count_one = 0;
+  uint32_t inclusive_zero = s_scan_storage[thid];
+  uint32_t exclusive_zero = inclusive_zero - S;
+#pragma unroll
+  for (int q = 0; q < Q; q++) {
+    UnsignedType elm = reg_mem[q];
+    uint32_t bit_is_0 = 1u - ((elm >> current_bit) & 1u);
+    if (bit_is_0 == 1) {
+      s_inp[exclusive_zero + count_zero] = elm;
+      count_zero++;
+    } else {
+      uint32_t exclusive_one = thid * Q - exclusive_zero;
+      s_inp[total_zeros + exclusive_one + count_one] = elm;
+      count_one++;
     }
   }
   __syncthreads();
 
-  // final scatter
-  for (uint32_t idx = tid; idx < B * Q; idx += B) {
-    const uint32_t v   = s_data[idx];
-    const uint32_t bin = (v >> bitBase) & (H - 1u);
-    const uint32_t g0  = s_binsG[bin];
-    const uint32_t l0  = s_bins[bin];
-    out_vals[g0 + (idx - l0)] = v;
+  // Copy the new ordering back into register memory
+  for (int q = 0; q < Q; q++) {
+    uint32_t loc_pos = thid * Q + q;
+    reg_mem[q] = s_inp[loc_pos];
   }
+  __syncthreads();
 }
 
-/* Kernel 2 (debug): also dump local tile and per-bin starts */
-template<uint32_t H, uint32_t lgH>
-__global__ void final_kernel_dbg(const uint32_t* __restrict__ inp_vals,
-                                 uint32_t* __restrict__ out_vals,
-                                 const uint32_t* __restrict__ hist,
-                                 const uint32_t* __restrict__ scanned_hist,
-                                 uint32_t current_shift,
-                                 uint32_t Q,
-                                 // debug dumps:
-                                 uint32_t* __restrict__ tile_after,   // [B*Q]
-                                 uint32_t* __restrict__ bins_local,   // [H]
-                                 uint32_t* __restrict__ bins_global)  // [H]
-{
-  const uint32_t B = blockDim.x;
-  const uint32_t tileStart = blockIdx.x * (B * Q);
-  const uint32_t bitBase = current_shift * lgH;
+template <typename T> __host__ __device__ constexpr T type_max() { return static_cast<T>(~T(0)); }
 
-  extern __shared__ uint32_t smem[];
-  uint32_t* s_data   = smem;                   // [B*Q]
-  uint32_t* s_cnt    = s_data   + B*Q;         // [B]
-  uint32_t* s_scanB  = s_cnt    + B;           // [B]
-  uint32_t* s_bins   = s_scanB  + B;           // [H]
-  uint32_t* s_scanH  = s_bins   + H;           // [H]
-  uint32_t* s_binsG  = s_scanH  + H;           // [H]
+template <typename UnsignedType, uint32_t H, uint32_t lgH, uint32_t B, uint32_t Q>
+__global__ void final_kernel(UnsignedType *inp_vals, UnsignedType *out_vals,
+                             uint32_t *orig_hist, uint32_t *scanned_hist,
+                             uint32_t current_shift, uint32_t N_global) {
 
-  const uint32_t tid  = threadIdx.x;
-  const uint32_t base = tileStart + tid;
+  const uint32_t N = B * Q;
+  const uint32_t thid = threadIdx.x;
+  const uint32_t block_id = blockIdx.x;
 
-  uint32_t regs[32];
-#pragma unroll
-  for (uint32_t i = 0; i < 32; ++i)
-    if (i < Q) regs[i] = inp_vals[base + i * B];
-  __syncthreads();
+  // Shared memory for all 3 steps
+  extern __shared__ uint32_t s_mem[];
+  UnsignedType *s_inp = (UnsignedType*) s_mem;                        // size N
+  uint32_t *s_local_hist = (uint32_t*) (s_inp + N);             // size H
+  uint32_t *s_local_scanned = s_local_hist + H;   // size H
+  uint32_t *s_scan_storage = s_local_scanned + H; // size B (for helpers)
+
+  // --- Step 1: Copy Q*B elements to shared memory  ---
+  const uint32_t block_start = block_id * N;
+  UnsignedType reg_mem[Q];
 
 #pragma unroll
-  for (uint32_t k = 0; k < lgH; ++k) {
-    const uint32_t b = bitBase + k;
-
-    uint32_t z = 0;
-#pragma unroll
-    for (uint32_t i = 0; i < 32; ++i)
-      if (i < Q) z += (((regs[i] >> b) & 1u) == 0u);
-    s_cnt[tid] = z;
-    __syncthreads();
-
-    s_scanB[tid] = s_cnt[tid];
-    __syncthreads();
-    for (uint32_t off = 1; off < B; off <<= 1) {
-      uint32_t add = (tid >= off) ? s_scanB[tid - off] : 0u;
-      __syncthreads();
-      s_scanB[tid] += add;
-      __syncthreads();
-    }
-    const uint32_t totalZ = s_scanB[B - 1];
-    const uint32_t zEx    = (tid == 0) ? 0u : s_scanB[tid - 1];
-    const uint32_t oEx    = tid * Q - zEx;
-
-    uint32_t lz = 0, lo = 0;
-#pragma unroll
-    for (uint32_t i = 0; i < 32; ++i) {
-      if (i < Q) {
-        const uint32_t v = regs[i];
-        if (((v >> b) & 1u) == 0u) s_data[zEx + lz++] = v;
-        else                       s_data[totalZ + oEx + lo++] = v;
-      }
-    }
-    __syncthreads();
-
-    const uint32_t slice = tid * Q;
-#pragma unroll
-    for (uint32_t i = 0; i < 32; ++i)
-      if (i < Q) regs[i] = s_data[slice + i];
-    __syncthreads();
-  }
-
-  // dump the locally sorted tile
-  for (uint32_t idx = tid; idx < B*Q; idx += B) tile_after[idx] = s_data[idx];
-
-  // load bins and global starts
-  for (uint32_t j = tid; j < H; j += B) {
-    s_bins[j]  = hist[blockIdx.x * H + j];
-    s_binsG[j] = scanned_hist[blockIdx.x * H + j];
-  }
-  __syncthreads();
-
-  // exclusive scan over H bins -> local starts
-  if (tid == 0) {
-    uint32_t acc = 0;
-    for (uint32_t j = 0; j < H; ++j) {
-      uint32_t c = s_bins[j];
-      s_bins[j] = acc;
-      acc += c;
+  for (int q = 0; q < Q; q++) {
+    uint32_t local_idx = q * B + thid;
+    uint32_t global_idx = block_start + local_idx;
+    if (global_idx < N_global) {
+      s_inp[local_idx] = inp_vals[global_idx];
+    } else {
+      s_inp[local_idx] = type_max<UnsignedType>();
     }
   }
+
   __syncthreads();
 
-  // dump bins (local starts) and global starts
-  for (uint32_t j = tid; j < H; j += B) {
-    bins_local[j]  = s_bins[j];
-    bins_global[j] = s_binsG[j];
+  for (int q = 0; q < Q; q++) {
+    uint32_t local_idx = Q * thid + q;
+    reg_mem[q] = s_inp[local_idx];
+  }
+
+  // --- Step 2: Loop of size lgH for two-way partitioning  ---
+  // (This performs an in-block radix sort)
+  for (uint32_t k = 0; k < lgH; k++) {
+    uint32_t current_bit = (current_shift * lgH + k);
+    bool is_last = k == (lgH - 1);
+    // Partition s_data -> s_temp based on bit k
+    partition2_by_bit<UnsignedType, B, Q>(s_inp, reg_mem, current_bit,
+                            s_scan_storage, is_last);
+    __syncthreads();
+  }
+
+  // --- Step 3: After the loop  ---
+
+  // 3.1: Copy original and scanned histograms to shared memory
+  for (uint32_t i = thid; i < H; i += B) {
+    // Load this block's original histogram
+    s_local_hist[i] = orig_hist[block_id * H + i];
+
+    // Load this block's global offset for bin 'i'
+    s_local_scanned[i] = scanned_hist[block_id * H + i];
   }
   __syncthreads();
 
-  // normal scatter
-  for (uint32_t idx = tid; idx < B * Q; idx += B) {
-    const uint32_t v   = s_data[idx];
-    const uint32_t bin = (v >> bitBase) & (H - 1u);
-    const uint32_t g0  = s_binsG[bin];
-    const uint32_t l0  = s_bins[bin];
-    out_vals[g0 + (idx - l0)] = v;
+  // 3.2: Scan in place the original histogram
+  // This gives the *local* offset for each bin. scanIncBlock is inclusive scan.
+  uint32_t res = scanIncBlock<Add<uint32_t>>(s_local_hist, thid);
+  // s_local_hist[bin] now holds the starting index in s_data[] for 'bin'.
+  __syncthreads();
+  s_local_hist[thid] = res;
+  __syncthreads();
+
+  // 3.3: Write Q elements to their final global positions
+  const uint32_t mask = H - 1u;
+#pragma unroll
+  for (int q = 0; q < Q; q++) {
+    uint32_t local_idx = thid * Q + q;
+    UnsignedType val = s_inp[local_idx]; // Get the locally sorted value
+    uint32_t bin = (val >> (current_shift * lgH)) & mask;
+
+    uint32_t final_idx =
+        scanned_hist[blockIdx.x * H + bin] - s_local_hist[bin] + local_idx;
+
+    if (final_idx < N_global) {
+      out_vals[final_idx] = val;
+    }
   }
 }
