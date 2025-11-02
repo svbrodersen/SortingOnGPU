@@ -57,22 +57,41 @@ int main (int argc, char * argv[]) {
   const uint32_t mem_size = N * sizeof(T);
 
   T *inp_vals = (T *)malloc(mem_size);
+  T *sorted_array = (T*) malloc(mem_size); 
   randomInitNat(inp_vals, N, H);
 
   double elapsed;
+  bool sorted = true;
   for (int i =0; i < GPU_RUNS; i++ )  {
     struct timeval t_start, t_end, t_diff;
     RadixSorter<T, Q, B, lgH, TILE_SIZE> sorter(N, inp_vals);
+    T *d_inp_vals; 
+    cudaMalloc((void **)&d_inp_vals, mem_size);
+    cudaMemcpy(d_inp_vals, inp_vals, mem_size, cudaMemcpyHostToDevice);
     gettimeofday(&t_start, NULL); 
     sorter.sort();
     gettimeofday(&t_end, NULL);
     timeval_subtract(&t_diff, &t_end, &t_start);
     elapsed += (t_diff.tv_sec*1e6+t_diff.tv_usec);
+
+    cudaMemcpy(sorted_array, sorter.d_out_vals_.get(), mem_size, cudaMemcpyDeviceToHost);;
+    
+    for (int j = 0; j < N-1; j++) {
+      if (sorted_array[j] > sorted_array[j+1]) {
+        printf("Error: failed sorting");
+        sorted = false;
+        break;
+      }
+    }
+    cudaFree(d_inp_vals);
   }
+  if (sorted) {
   elapsed = elapsed / ((double)GPU_RUNS); 
   printf("Radix sort time for size %d: %.2f microsecs\n", N, elapsed);
+  }
 
   free(inp_vals);
+  free(sorted_array);
 
   return 0;
 }

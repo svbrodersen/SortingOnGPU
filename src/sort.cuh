@@ -109,6 +109,8 @@ public:
     cudaMalloc((void **)&ptr_, count * sizeof(T));
   }
 
+  DeviceBuffer(size_t count, T* ptr) : ptr_(ptr), size_(count) { }
+
   ~DeviceBuffer() {
     if (ptr_)
       cudaFree(ptr_);
@@ -219,8 +221,8 @@ public:
         shared_mem_size_((B * Q) * sizeof(UnsignedType) +
                          (2 * H + B) * sizeof(uint32_t)),
         d_hist_(hist_size_),
-        d_inp_vals_(N),
-        d_out_vals_(N),
+        d_inp_vals_(N, inp_vals),
+        d_out_vals_(N, inp_vals),
         d_hist_scan_(hist_size_), d_hist_scan_tr_tr_(hist_size_),
         d_tmp_vals_(hist_size_) {
     // Setup grid dimensions
@@ -234,7 +236,6 @@ public:
     if constexpr (!IsUnsignedInt) {
       throw std::logic_error("Can only pre-initialize with Unsigned int");
     }
-    encodeInputCopy(inp_vals);
     initialized_ = true;
   }
 
