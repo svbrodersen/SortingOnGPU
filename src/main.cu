@@ -11,7 +11,7 @@
 
 #define GPU_RUNS 400
 
-using T = uint32_t;
+using T = uint16_t;
 
 void printArray(T *inp_vals, uint32_t N, const char *name) {
   std::cout << name << "[:" << N << "] = [";
@@ -31,7 +31,7 @@ void printDeviceArray(T *inp_vals, int mem_size, uint32_t N,
   printArray(d_hist_host, N, name);
 }
 
-void randomInitNat(uint32_t* data, const uint32_t size, const uint32_t H) {
+void randomInitNat(T* data, const uint32_t size, const uint32_t H) {
     for (int i = 0; i < size; ++i) {
         unsigned long int r = rand();
         data[i] = r;

@@ -91,6 +91,7 @@ template <typename T> bool runTest(uint32_t N) {
                           std::is_same_v<T, float>    ? "float"    :
                           std::is_same_v<T, double>    ? "double"    :
                           std::is_same_v<T, uint64_t>    ? "uint64_t"    :
+                          std::is_same_v<T, uint16_t>    ? "uint16_t"    :
                           "unknown";
 
   // 1. Define constants (same for both types, assuming 32-bit key)
@@ -248,10 +249,11 @@ int main() {
   int double_tests_passed = runAllTests<double>( test_sizes, N);
 
   int uint64_test_passed = runAllTests<uint64_t>( test_sizes, N);
+  int uint16_test_passed = runAllTests<uint16_t>( test_sizes, N);
 
   total_passed = uint32_tests_passed + int32_tests_passed + float_tests_passed
-    + double_tests_passed + uint64_test_passed;
-  total_tests = 5 * N;
+    + double_tests_passed + uint64_test_passed + uint16_test_passed;
+  total_tests = 6 * N;
 
   printf("\n\n====== FINAL TEST SUMMARY ======\n");
   printf("uint32_t tests: Passed %d/%d\n", uint32_tests_passed, N);
@@ -259,6 +261,7 @@ int main() {
   printf("float_t tests:  Passed %d/%d\n", float_tests_passed, N);
   printf("double tests:  Passed %d/%d\n", double_tests_passed, N);
   printf("uint64 tests:  Passed %d/%d\n", uint64_test_passed, N);
+  printf("uint16 tests:  Passed %d/%d\n", uint16_test_passed, N);
   printf("------------------------------------------------------\n");
   printf("**Total Tests: Passed %d out of %d tests.**\n", total_passed,
          total_tests);

@@ -231,6 +231,9 @@ public:
     grid_backward_ = dim3(dimy, dimx, 1);
 
     // Pre-allocate encoding buffer
+    if constexpr (!IsUnsignedInt) {
+      throw std::logic_error("Can only pre-initialize with Unsigned int");
+    }
     encodeInputCopy(inp_vals);
     initialized_ = true;
   }
