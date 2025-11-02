@@ -1,17 +1,36 @@
 #include "constants.cuh"
 #include "sort.cuh"
-#include <cstdint>
-#include <cstdio>
-#include <cuda_runtime.h>
-#include <limits>
-#include <map> // For frequency check
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h> // For memcpy
-#include <sys/types.h>
-#include <iostream>
 
-template<typename T>
+// C++ Standard Library Headers
+#include <cstdint>
+#include <iomanip>  // For std::setw, std::left
+#include <iostream> // For std::cout, std::cerr, std::endl
+#include <limits>   // For std::numeric_limits
+#include <map>      // For std::map (element preservation and results)
+#include <string>   // For std::string
+#include <tuple>    // For std::tuple (to list types)
+#include <utility>  // For std::apply
+#include <vector>   // For std::vector (replaces malloc/free)
+
+// CUDA Headers
+#include <cuda_runtime.h>
+
+
+template <typename T>
+struct TypeName {
+    static const char* value;
+};
+template <> const char* TypeName<uint32_t>::value = "uint32_t";
+template <> const char* TypeName<int32_t>::value  = "int32_t";
+template <> const char* TypeName<float>::value    = "float";
+template <> const char* TypeName<double>::value   = "double";
+template <> const char* TypeName<uint64_t>::value = "uint64_t";
+template <> const char* TypeName<uint16_t>::value = "uint16_t";
+template <> const char* TypeName<uint8_t>::value = "uint8_t";
+template <typename T> const char* TypeName<T>::value = "unknown"; // Fallback
+
+
+template <typename T>
 void printArray(T *inp_vals, uint32_t N, const char *name) {
   std::cout << name << "[:" << N << "] = [";
   for (uint32_t i = 0; i < N; i++) {
@@ -86,13 +105,7 @@ bool checkElementPreservation(T *original, T *sorted, uint32_t N) {
  */
 template <typename T> bool runTest(uint32_t N) {
   // Determine the type name for clearer output
-  const char* type_name = std::is_same_v<T, uint32_t> ? "uint32_t" :
-                          std::is_same_v<T, int32_t>  ? "int32_t"  :
-                          std::is_same_v<T, float>    ? "float"    :
-                          std::is_same_v<T, double>    ? "double"    :
-                          std::is_same_v<T, uint64_t>    ? "uint64_t"    :
-                          std::is_same_v<T, uint16_t>    ? "uint16_t"    :
-                          "unknown";
+  const char* type_name = TypeName<T>::value;
 
   // 1. Define constants (same for both types, assuming 32-bit key)
   const uint32_t Q = 22;
@@ -121,7 +134,7 @@ template <typename T> bool runTest(uint32_t N) {
 
   // 3. Fill with random data
   for (uint32_t i = 0; i < N; i++) {
-    // In reverse order, 
+    // In reverse order,
     inp_vals[i] = N - 50 - i;
   }
 
@@ -143,11 +156,14 @@ template <typename T> bool runTest(uint32_t N) {
         inp_vals[6] = -1;
       if (N > 7)
         inp_vals[7] = -100;
-    } else if constexpr (std::is_same_v<T, float_t> || std::is_same_v<T, double>) { // int32_t
-      inp_vals[N-20] = (T) -1000;
-      inp_vals[N-N%30] = (T) -1337;
-      inp_vals[N-N%20] = (T) -1555;
-      inp_vals[N - (N/2)] = std::numeric_limits<T>::max();
+    } else if constexpr (std::is_same_v<T, float_t> ||
+                         std::is_same_v<T, double>) { // int32_t
+      if (N > 20) {
+        inp_vals[N - 20] = (T)-1000;
+      }
+      inp_vals[N - N % 30] = (T)-1337;
+      inp_vals[N - N % 20] = (T)-1555;
+      inp_vals[N - (N / 2)] = std::numeric_limits<T>::max();
     }
   }
 
@@ -210,8 +226,7 @@ template <typename T> bool runTest(uint32_t N) {
   return success;
 }
 
-template <typename T>
-int runAllTests(int *test_sizes, int N) {
+template <typename T> int runAllTests(int *test_sizes, int N) {
   // Define a set of test sizes
   int tests_passed = 0;
 
@@ -230,39 +245,38 @@ int main() {
 
   srand(42);
 
-  int N = 5;
+  int N_sizes = 5;
   int test_sizes[] = {10, 100, 1024, 10000, 1000000};
 
   int total_tests = 0;
   int total_passed = 0;
 
-  // 1. Run tests for uint32_t
-  int uint32_tests_passed = runAllTests<uint32_t>(test_sizes, N);
+  using TestTypes =
+      std::tuple<uint32_t, int32_t, float, double, uint64_t, uint16_t, uint8_t>;
+  std::map<std::string, int> results;
 
-  // 2. Run tests for int32_t
-  int int32_tests_passed = runAllTests<int32_t>( test_sizes, N);
+  std::apply(
+      [&](auto... type) {
+        // This C++17 fold expression expands to:
+        // results["uint32_t"] = runAllTests<uint32_t>(...);
+        // results["int32_t"]  = runAllTests<int32_t>(...);
+        // ...and so on for every type in TestTypes
+        (..., (results[TypeName<decltype(type)>::value] =
+                   runAllTests<decltype(type)>(test_sizes, N_sizes)));
+      },
+      TestTypes{});
 
-  // 3. Run tests for float
-  int float_tests_passed = runAllTests<float_t>( test_sizes, N);
+  total_passed = 0;
+  total_tests = 0;
 
+  std::cout << "\n\n====== FINAL TEST SUMMARY ======\n";
+  for (const auto &[type_name, passed_count] : results) {
+    std::cout << std::left << std::setw(12) << (type_name + " tests:")
+              << " Passed " << passed_count << "/" << N_sizes << "\n";
+    total_passed += passed_count;
+    total_tests += N_sizes;
+  }
 
-  int double_tests_passed = runAllTests<double>( test_sizes, N);
-
-  int uint64_test_passed = runAllTests<uint64_t>( test_sizes, N);
-  int uint16_test_passed = runAllTests<uint16_t>( test_sizes, N);
-
-  total_passed = uint32_tests_passed + int32_tests_passed + float_tests_passed
-    + double_tests_passed + uint64_test_passed + uint16_test_passed;
-  total_tests = 6 * N;
-
-  printf("\n\n====== FINAL TEST SUMMARY ======\n");
-  printf("uint32_t tests: Passed %d/%d\n", uint32_tests_passed, N);
-  printf("int32_t tests:  Passed %d/%d\n", int32_tests_passed, N);
-  printf("float_t tests:  Passed %d/%d\n", float_tests_passed, N);
-  printf("double tests:  Passed %d/%d\n", double_tests_passed, N);
-  printf("uint64 tests:  Passed %d/%d\n", uint64_test_passed, N);
-  printf("uint16 tests:  Passed %d/%d\n", uint16_test_passed, N);
-  printf("------------------------------------------------------\n");
   printf("**Total Tests: Passed %d out of %d tests.**\n", total_passed,
          total_tests);
   printf("====================================================\n");
