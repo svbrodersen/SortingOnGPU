@@ -1,7 +1,7 @@
-#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <cuda_runtime.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,11 +9,9 @@
 #include "sort.cuh"
 #include <iostream>
 
-#define GPU_RUNS 100
+#define GPU_RUNS 400
 
 using T = uint32_t;
-
-
 
 void printArray(T *inp_vals, uint32_t N, const char *name) {
   std::cout << name << "[:" << N << "] = [";
@@ -36,7 +34,7 @@ void printDeviceArray(T *inp_vals, int mem_size, uint32_t N,
 void randomInitNat(uint32_t* data, const uint32_t size, const uint32_t H) {
     for (int i = 0; i < size; ++i) {
         unsigned long int r = rand();
-        data[i] = r % H;
+        data[i] = r;
     }
 }
 
@@ -61,29 +59,20 @@ int main (int argc, char * argv[]) {
   T *inp_vals = (T *)malloc(mem_size);
   randomInitNat(inp_vals, N, H);
 
-  // printArray(inp_vals, 10, "inp_vals");
-
-  T *out_vals = (T *)malloc(mem_size);
-  RadixSorter<T, Q, B, lgH, TILE_SIZE> sorter(N, inp_vals);
-
-  {
-    // Dry run
-    sorter.sort();
-  }
-
   double elapsed;
-  struct timeval t_start, t_end, t_diff;
-  gettimeofday(&t_start, NULL); 
-  for (int i = 0; i < GPU_RUNS; i++) {
+  for (int i =0; i < GPU_RUNS; i++ )  {
+    struct timeval t_start, t_end, t_diff;
+    RadixSorter<T, Q, B, lgH, TILE_SIZE> sorter(N, inp_vals);
+    gettimeofday(&t_start, NULL); 
     sorter.sort();
+    gettimeofday(&t_end, NULL);
+    timeval_subtract(&t_diff, &t_end, &t_start);
+    elapsed += (t_diff.tv_sec*1e6+t_diff.tv_usec);
   }
-  gettimeofday(&t_end, NULL);
-  timeval_subtract(&t_diff, &t_end, &t_start);
-  elapsed = (t_diff.tv_sec*1e6+t_diff.tv_usec) / ((double)GPU_RUNS); 
+  elapsed = elapsed / ((double)GPU_RUNS); 
   printf("Radix sort time for size %d: %.2f microsecs\n", N, elapsed);
 
   free(inp_vals);
-  free(out_vals);
 
   return 0;
 }

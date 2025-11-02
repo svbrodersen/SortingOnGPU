@@ -263,9 +263,6 @@ private:
       d_inp_vals_.swap(d_out_vals_);
     }
 
-    CUDASSERT(cudaPeekAtLastError());
-    cudaDeviceSynchronize();
-
     return 0;
   }
 
