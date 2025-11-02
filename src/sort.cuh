@@ -3,8 +3,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <cuda_runtime.h>
+#include <stdexcept>
 #include <stdlib.h>
 #include <sys/types.h>
+#include <system_error>
 #include <type_traits>
 #include <vector>
 
@@ -120,10 +122,29 @@ public:
   DeviceBuffer(DeviceBuffer &&other) noexcept
       : ptr_(other.ptr_), size_(other.size_) {
     other.ptr_ = nullptr;
+    other.size_ = 0;
+  }
+
+  DeviceBuffer &operator=(DeviceBuffer &&other) noexcept {
+    if (this != &other) {
+      if (ptr_)
+        cudaFree(ptr_);
+      ptr_ = other.ptr_;
+      size_ = other.size_;
+      other.ptr_ = nullptr;
+      other.size_ = 0;
+    }
+    return *this;
+  }
+
+  void swap(DeviceBuffer& other) noexcept {
+    std::swap(ptr_, other.ptr_);
+    std::swap(size_, other.size_);
   }
 
   T *get() { return ptr_; }
   const T *get() const { return ptr_; }
+
   size_t size() const { return size_; }
 
   void copyToDevice(const T *host_data) {
@@ -144,6 +165,9 @@ public:
   // Check if we're dealing with unsigned integers
   static constexpr bool IsUnsignedInt = std::is_unsigned<T>::value;
 
+  DeviceBuffer<UnsignedType> d_inp_vals_;
+  DeviceBuffer<UnsignedType> d_out_vals_;
+
 private:
   static constexpr uint32_t H = (1 << lgH);
   uint32_t N_;
@@ -151,6 +175,7 @@ private:
   uint32_t hist_size_;
   uint32_t num_passes_;
   size_t shared_mem_size_;
+  bool initialized_;
 
   // Grid dimensions
   dim3 block_;
@@ -158,8 +183,6 @@ private:
   dim3 grid_backward_;
 
   // Device buffers
-  DeviceBuffer<UnsignedType> d_inp_vals_;
-  DeviceBuffer<UnsignedType> d_out_vals_;
   DeviceBuffer<uint32_t> d_hist_;
   DeviceBuffer<uint32_t> d_hist_scan_;
   DeviceBuffer<uint32_t> d_hist_scan_tr_tr_;
@@ -183,59 +206,82 @@ public:
     block_ = dim3(TILE_SIZE, TILE_SIZE, 1);
     grid_forward_ = dim3(dimx, dimy, 1);
     grid_backward_ = dim3(dimy, dimx, 1);
-
+  
     // Pre-allocate encoding buffer
     if constexpr (!IsUnsignedInt) {
       encoded_data_.resize(N);
     }
   }
 
-  int sort(const T *inp_vals, T *out_vals) {
-    if constexpr (IsUnsignedInt) {
-      // Direct path for unsigned integers
-      d_inp_vals_.copyToDevice(
-          reinterpret_cast<const UnsignedType *>(inp_vals));
-      num_passes_ = calculateNumPasses(inp_vals);
+  RadixSorter(uint32_t N, T* inp_vals)
+      : N_(N), num_blocks_((N + (B * Q) - 1) / (B * Q)),
+        hist_size_(num_blocks_ * (1 << lgH)),
+        shared_mem_size_((B * Q) * sizeof(UnsignedType) +
+                         (2 * H + B) * sizeof(uint32_t)),
+        d_hist_(hist_size_),
+        d_inp_vals_(N),
+        d_out_vals_(N),
+        d_hist_scan_(hist_size_), d_hist_scan_tr_tr_(hist_size_),
+        d_tmp_vals_(hist_size_) {
+    // Setup grid dimensions
+    const int dimy = (num_blocks_ + TILE_SIZE - 1) / TILE_SIZE;
+    const int dimx = (H + TILE_SIZE - 1) / TILE_SIZE;
+    block_ = dim3(TILE_SIZE, TILE_SIZE, 1);
+    grid_forward_ = dim3(dimx, dimy, 1);
+    grid_backward_ = dim3(dimy, dimx, 1);
 
-      UnsignedType *d_current_input = d_inp_vals_.get();
-      UnsignedType *d_current_output = d_out_vals_.get();
+    // Pre-allocate encoding buffer
+    encodeInputCopy(inp_vals);
+    initialized_ = true;
+  }
 
-      for (uint32_t pass = 0; pass < num_passes_; pass++) {
-        executeOnePass(d_current_input, d_current_output, pass);
-        std::swap(d_current_input, d_current_output);
-      }
-
-      d_inp_vals_.copyToHost(reinterpret_cast<UnsignedType *>(out_vals));
-    } else {
-      // Original path with encoding/decoding
-      encodeInput(inp_vals);
-      d_inp_vals_.copyToDevice(encoded_data_);
-      num_passes_ = calculateNumPasses(inp_vals);
-
-      UnsignedType *d_current_input = d_inp_vals_.get();
-      UnsignedType *d_current_output = d_out_vals_.get();
-
-      for (uint32_t pass = 0; pass < num_passes_; pass++) {
-        executeOnePass(d_current_input, d_current_output, pass);
-        std::swap(d_current_input, d_current_output);
-      }
-
-      copyResultAndDecode(out_vals);
+  int sort() {
+    if (!initialized_) {
+      throw std::runtime_error("Not initialized with device buffer, when running sort()");
     }
+    return sortMain();
+  }
+
+  int sort(const T *inp_vals, T *out_vals) {
+    encodeInputCopy(inp_vals);
+    sortMain();
+    copyResultAndDecode(out_vals);
     return 0;
   }
 
 private:
-  void encodeInput(const T *inp_vals) {
-    if constexpr (!IsUnsignedInt) {
-    for (uint32_t i = 0; i < N_; i++) {
-      encoded_data_[i] = Traits::encode(inp_vals[i]);
+  int sortMain() {
+    num_passes_ = calculateNumPasses();
+    UnsignedType *d_current_input = d_inp_vals_.get();
+    UnsignedType *d_current_output = d_out_vals_.get();
+    for (uint32_t pass = 0; pass < num_passes_; pass++) {
+      executeOnePass(d_current_input, d_current_output, pass);
+      std::swap(d_current_input, d_current_output);
     }
+
+    if (num_passes_ % 2 == 0) {
+      d_inp_vals_.swap(d_out_vals_);
+    }
+
+    CUDASSERT(cudaPeekAtLastError());
+    cudaDeviceSynchronize();
+
+    return 0;
+  }
+
+  void encodeInputCopy(const T *inp_vals) {
+    if constexpr (!IsUnsignedInt) {
+      for (uint32_t i = 0; i < N_; i++) {
+        encoded_data_[i] = Traits::encode(inp_vals[i]);
+      }
+      d_inp_vals_.copyToDevice(encoded_data_.data());
+    } else {
+      d_inp_vals_.copyToDevice(
+          reinterpret_cast<const UnsignedType *>(inp_vals));
     }
   }
 
-  uint32_t calculateNumPasses(const T *inp_vals) {
-    // Check if we need all bits or can optimize
+  uint32_t __inline__ calculateNumPasses() {
     return (sizeof(T) * 8 + lgH - 1) / lgH;
   }
 
@@ -262,16 +308,16 @@ private:
         <<<num_blocks_, B, shared_mem_size_>>>(d_input, d_output, d_hist_.get(),
                                                d_hist_scan_tr_tr_.get(), pass,
                                                N_);
-    CUDASSERT(cudaPeekAtLastError());
-    cudaDeviceSynchronize();
   }
 
   void copyResultAndDecode(T *out_vals) {
     if constexpr (!IsUnsignedInt) {
-      d_inp_vals_.copyToHost(encoded_data_.data());
+      d_out_vals_.copyToHost(encoded_data_.data());
       for (uint32_t i = 0; i < N_; i++) {
         out_vals[i] = Traits::decode(encoded_data_[i]);
       }
+    } else {
+      d_out_vals_.copyToHost(reinterpret_cast<UnsignedType *>(out_vals));
     }
   }
 };

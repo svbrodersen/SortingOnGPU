@@ -9,7 +9,7 @@
 #include "sort.cuh"
 #include <iostream>
 
-#define GPU_RUNS 10
+#define GPU_RUNS 100
 
 using T = uint32_t;
 
@@ -64,18 +64,18 @@ int main (int argc, char * argv[]) {
   // printArray(inp_vals, 10, "inp_vals");
 
   T *out_vals = (T *)malloc(mem_size);
-  RadixSorter<T, Q, B, lgH, TILE_SIZE> sorter(N);
+  RadixSorter<T, Q, B, lgH, TILE_SIZE> sorter(N, inp_vals);
 
   {
     // Dry run
-    sorter.sort(inp_vals, out_vals);
+    sorter.sort();
   }
 
   double elapsed;
   struct timeval t_start, t_end, t_diff;
   gettimeofday(&t_start, NULL); 
   for (int i = 0; i < GPU_RUNS; i++) {
-    sorter.sort(inp_vals, out_vals);
+    sorter.sort();
   }
   gettimeofday(&t_end, NULL);
   timeval_subtract(&t_diff, &t_end, &t_start);
