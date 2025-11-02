@@ -109,7 +109,10 @@ public:
     cudaMalloc((void **)&ptr_, count * sizeof(T));
   }
 
-  DeviceBuffer(size_t count, T* ptr) : ptr_(ptr), size_(count) { }
+  DeviceBuffer(size_t count, T* ptr) : size_(count) {
+    cudaMalloc((void **)&ptr_, count * sizeof(T));
+    cudaMemcpy(ptr_, ptr, count * sizeof(T), cudaMemcpyDeviceToDevice);
+  }
 
   ~DeviceBuffer() {
     if (ptr_)
@@ -125,18 +128,6 @@ public:
       : ptr_(other.ptr_), size_(other.size_) {
     other.ptr_ = nullptr;
     other.size_ = 0;
-  }
-
-  DeviceBuffer &operator=(DeviceBuffer &&other) noexcept {
-    if (this != &other) {
-      if (ptr_)
-        cudaFree(ptr_);
-      ptr_ = other.ptr_;
-      size_ = other.size_;
-      other.ptr_ = nullptr;
-      other.size_ = 0;
-    }
-    return *this;
   }
 
   void swap(DeviceBuffer& other) noexcept {
@@ -201,7 +192,7 @@ public:
                          (2 * H + B) * sizeof(uint32_t)),
         d_inp_vals_(N), d_out_vals_(N), d_hist_(hist_size_),
         d_hist_scan_(hist_size_), d_hist_scan_tr_tr_(hist_size_),
-        d_tmp_vals_(hist_size_) {
+        d_tmp_vals_(hist_size_), initialized_(false) {
     // Setup grid dimensions
     const int dimy = (num_blocks_ + TILE_SIZE - 1) / TILE_SIZE;
     const int dimx = (H + TILE_SIZE - 1) / TILE_SIZE;
@@ -213,6 +204,7 @@ public:
     if constexpr (!IsUnsignedInt) {
       encoded_data_.resize(N);
     }
+
   }
 
   RadixSorter(uint32_t N, T* inp_vals)
@@ -222,9 +214,9 @@ public:
                          (2 * H + B) * sizeof(uint32_t)),
         d_hist_(hist_size_),
         d_inp_vals_(N, inp_vals),
-        d_out_vals_(N, inp_vals),
+        d_out_vals_(N),
         d_hist_scan_(hist_size_), d_hist_scan_tr_tr_(hist_size_),
-        d_tmp_vals_(hist_size_) {
+        d_tmp_vals_(hist_size_), initialized_(true) {
     // Setup grid dimensions
     const int dimy = (num_blocks_ + TILE_SIZE - 1) / TILE_SIZE;
     const int dimx = (H + TILE_SIZE - 1) / TILE_SIZE;
@@ -303,6 +295,7 @@ private:
     // Step 4: Transpose back (H × num_blocks -> num_blocks × H)
     transpose<TILE_SIZE><<<grid_backward_, block_>>>(
         d_hist_scan_.get(), d_hist_scan_tr_tr_.get(), H, num_blocks_);
+
 
     // Step 5: Reorder elements
     final_kernel<UnsignedType, H, lgH, B, Q>

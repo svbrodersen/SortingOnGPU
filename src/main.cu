@@ -11,7 +11,15 @@
 
 #define GPU_RUNS 400
 
-using T = uint16_t;
+#define cudaCheckError() {                                              \
+    cudaError_t e=cudaGetLastError();                                   \
+    if(e!=cudaSuccess) {                                                \
+      printf("Cuda failure %s:%d: '%s'\n",__FILE__,__LINE__,cudaGetErrorString(e)); \
+      exit(0);                                                          \
+    }                                                                   \
+}
+
+using T = uint32_t;
 
 void printArray(T *inp_vals, uint32_t N, const char *name) {
   std::cout << name << "[:" << N << "] = [";
@@ -60,16 +68,19 @@ int main (int argc, char * argv[]) {
   T *sorted_array = (T*) malloc(mem_size); 
   randomInitNat(inp_vals, N, H);
 
-  double elapsed;
+  T *d_inp_vals; 
+  cudaMalloc((void **)&d_inp_vals, mem_size);
+  cudaMemcpy(d_inp_vals, inp_vals, mem_size, cudaMemcpyHostToDevice);
+
+  double elapsed = 0.0;
   bool sorted = true;
   for (int i =0; i < GPU_RUNS; i++ )  {
     struct timeval t_start, t_end, t_diff;
-    RadixSorter<T, Q, B, lgH, TILE_SIZE> sorter(N, inp_vals);
-    T *d_inp_vals; 
-    cudaMalloc((void **)&d_inp_vals, mem_size);
-    cudaMemcpy(d_inp_vals, inp_vals, mem_size, cudaMemcpyHostToDevice);
+    RadixSorter<T, Q, B, lgH, TILE_SIZE> sorter(N, d_inp_vals);
     gettimeofday(&t_start, NULL); 
     sorter.sort();
+    cudaDeviceSynchronize();
+    cudaCheckError();
     gettimeofday(&t_end, NULL);
     timeval_subtract(&t_diff, &t_end, &t_start);
     elapsed += (t_diff.tv_sec*1e6+t_diff.tv_usec);
@@ -83,11 +94,11 @@ int main (int argc, char * argv[]) {
         break;
       }
     }
-    cudaFree(d_inp_vals);
   }
+  cudaFree(d_inp_vals);
   if (sorted) {
-  elapsed = elapsed / ((double)GPU_RUNS); 
-  printf("Radix sort time for size %d: %.2f microsecs\n", N, elapsed);
+    elapsed = elapsed / ((double)GPU_RUNS); 
+    printf("Radix sort time for size %d: %.2f microsecs\n", N, elapsed);
   }
 
   free(inp_vals);
