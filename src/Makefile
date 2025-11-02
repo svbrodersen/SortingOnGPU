@@ -23,42 +23,30 @@ run: $(MAIN)
 test: $(MAIN_TEST)
 	./radix_test
 
-# --- Small kernel-specific tests ---
-test-k1: test_kernel1
-	./test_kernel1
-
-test_kernel1: test_kernel1.cu kernels.cuh
-	$(COMPILER) $(OPT_FLAGS) $(ARCH) -o $@ $<
-
-test-k2: test_kernel2
-	./test_kernel2
-
-test_kernel2: test_kernel2.cu kernels.cuh
-	$(COMPILER) $(OPT_FLAGS) $(ARCH) -o $@ $<
-
-# --- Debug + timing test for kernel2 (one-block; prints µs/M el/s/GB/s) ---
-test-both: test_both
-	./test_both
-
 test_both: test_both.cu kernels.cuh
 	$(COMPILER) $(OPT_FLAGS) $(ARCH) -o $@ $<
 
-# --- Scalable benchmark (optional; times full pass at scale) ---
-bench-k2: bench_kernel2
-	./bench_kernel2
+# ---------- kernel benchmarks ----------
+ARCH ?=
+RUNS ?= 10
+SIZES ?= 1000 10000 100000 1000000 2000000 5000000 10000000 100000000
 
-bench_kernel2: bench_kernel2.cu kernels.cuh
-	$(COMPILER) $(OPT_FLAGS) $(ARCH) \
-		-DELEMS_PER_THREAD=$(ELEMS_PER_THREAD) \
-		-DBLOCK_SIZE=$(BLOCK_SIZE) \
-		-DLGH=$(LGH) \
-		-DTILES=$(TILES) \
-		-o $@ $<
+bench-kernels-build: bench_kernels.cu host_skel.cuh pbb_kernels.cuh kernels.cuh constants.cuh
+	$(COMPILER) $(OPT_FLAGS) $(ARCH) bench_kernels.cu -o bench_kernels
+
+bench-k1: bench-kernels-build
+	@for N in $(SIZES); do ./bench_kernels --mode k1 --n $$N --runs $(RUNS); done | tee k1.txt
+
+bench-k2: bench-kernels-build
+	@for N in $(SIZES); do ./bench_kernels --mode k2 --n $$N --runs $(RUNS); done | tee k2.txt
+
+bench-both: bench-kernels-build
+	@for N in $(SIZES); do ./bench_kernels --mode both --n $$N --runs $(RUNS); done | tee k1k2_only.txt
 
 default: compile
 
 clean:
-	rm -f $(MAIN)
+	rm -f $(MAIN) $(MAIN_TEST) bench_kernels k1.txt k2.txt pass_k1k2_only.txt
 
 .PHONY: clean all run
 
