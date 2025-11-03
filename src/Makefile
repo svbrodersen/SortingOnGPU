@@ -1,6 +1,5 @@
 COMPILER ?= nvcc
-OPT_FLAGS ?= -O3 -std=c++17
-
+OPT_FLAGS ?= -O3 -std=c++17 -arch=sm_80
 ELEMS_PER_THREAD ?= 24
 
 MAIN := main
