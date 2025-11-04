@@ -10,95 +10,6 @@
 #include <type_traits>
 #include <vector>
 
-template <typename T, bool IsSigned, bool IsFloat> struct ValueTraitImpl;
-
-template <typename T> struct ValueTraitImpl<T, false, false> {
-public:
-  using UnsignedType = typename std::make_unsigned<T>::type;
-
-  static UnsignedType encode(T v) { return static_cast<UnsignedType>(v); }
-
-  static T decode(UnsignedType v) { return static_cast<T>(v); }
-
-  static bool needsAllBits() { return false; }
-};
-
-template <typename T> struct ValueTraitImpl<T, true, false> {
-public:
-  using UnsignedType = typename std::make_unsigned<T>::type;
-
-  static UnsignedType encode(T v) {
-    UnsignedType u = static_cast<UnsignedType>(v);
-    return u ^ (UnsignedType(1) << (sizeof(T) * 8 - 1));
-  }
-
-  static T decode(UnsignedType value) {
-    UnsignedType u = value ^ (UnsignedType(1) << (sizeof(T) * 8 - 1));
-    return static_cast<T>(u);
-  }
-
-  static bool needsAllBits() {
-    return true; // Must process all bits for signed bits
-  }
-};
-
-template <typename T> struct ValueTraitImpl<T, true, true> {
-public:
-  using UnsignedType = typename std::conditional<
-      sizeof(T) == 4, uint32_t,
-      typename std::conditional<sizeof(T) == 8, uint64_t, void>::type>::type;
-
-  static UnsignedType encode(T v) {
-    // Reinterpret the floating point bits as unsigned integer
-    UnsignedType u;
-
-    // Use union for type punning (safe in CUDA)
-    union {
-      T f;
-      UnsignedType u;
-    } converter;
-
-    converter.f = v;
-
-    if (converter.u & (UnsignedType(1) << (sizeof(T) * 8 - 1))) {
-      // Negative number: flip all bits
-      return ~converter.u;
-    } else {
-      // Positive number: flip the sign bit
-      return converter.u ^ (UnsignedType(1) << (sizeof(T) * 8 - 1));
-    }
-  }
-
-  static T decode(UnsignedType value) {
-    UnsignedType u;
-
-    // Reverse the transformation
-    if (value & (UnsignedType(1) << (sizeof(T) * 8 - 1))) {
-      // Was positive: flip the sign bit back
-      u = value ^ (UnsignedType(1) << (sizeof(T) * 8 - 1));
-    } else {
-      // Was negative: flip all bits back
-      u = ~value;
-    }
-
-    union {
-      T f;
-      UnsignedType u;
-    } converter;
-
-    converter.u = u;
-    return converter.f;
-  }
-
-  static bool needsAllBits() {
-    return true; // Must process all bits for signed bits
-  }
-};
-
-template <typename T>
-struct ValueTraits : ValueTraitImpl<T, std::is_signed<T>::value,
-                                    std::is_floating_point<T>::value> {};
-
 template <typename T> class DeviceBuffer {
 private:
   T *ptr_;
@@ -181,9 +92,6 @@ private:
   DeviceBuffer<uint32_t> d_hist_scan_tr_tr_;
   DeviceBuffer<uint32_t> d_tmp_vals_;
 
-  // Host buffers for encoding/decoding
-  std::vector<UnsignedType> encoded_data_;
-
 public:
   RadixSorter(uint32_t N)
       : N_(N), num_blocks_((N + (B * Q) - 1) / (B * Q)),
@@ -200,11 +108,6 @@ public:
     grid_forward_ = dim3(dimx, dimy, 1);
     grid_backward_ = dim3(dimy, dimx, 1);
   
-    // Pre-allocate encoding buffer
-    if constexpr (!IsUnsignedInt) {
-      encoded_data_.resize(N);
-    }
-
   }
 
   RadixSorter(uint32_t N, T* inp_vals)
@@ -264,10 +167,11 @@ private:
 
   void encodeInputCopy(const T *inp_vals) {
     if constexpr (!IsUnsignedInt) {
-      for (uint32_t i = 0; i < N_; i++) {
-        encoded_data_[i] = Traits::encode(inp_vals[i]);
-      }
-      d_inp_vals_.copyToDevice(encoded_data_.data());
+      const int numBlocks = (N_ + B - 1) / B;
+      UnsignedType *d_out_vals = d_inp_vals_.get();
+      DeviceBuffer<T>  d_inp_vals = DeviceBuffer<T>(N_);
+      d_inp_vals.copyToDevice(inp_vals);
+      encode_kernel<T><<<numBlocks, B>>>(d_inp_vals.get(), d_out_vals, N_);
     } else {
       d_inp_vals_.copyToDevice(
           reinterpret_cast<const UnsignedType *>(inp_vals));
@@ -306,10 +210,11 @@ private:
 
   void copyResultAndDecode(T *out_vals) {
     if constexpr (!IsUnsignedInt) {
-      d_out_vals_.copyToHost(encoded_data_.data());
-      for (uint32_t i = 0; i < N_; i++) {
-        out_vals[i] = Traits::decode(encoded_data_[i]);
-      }
+      const int numBlocks = (N_ + B - 1) / B;
+      UnsignedType *d_inp_vals = d_out_vals_.get();
+      DeviceBuffer<T> d_out_vals = DeviceBuffer<T>(N_);
+      decode_kernel<T><<<numBlocks, B>>>(d_inp_vals, d_out_vals.get(), N_);
+      d_out_vals.copyToHost(out_vals);
     } else {
       d_out_vals_.copyToHost(reinterpret_cast<UnsignedType *>(out_vals));
     }

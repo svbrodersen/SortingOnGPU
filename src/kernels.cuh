@@ -4,6 +4,113 @@
 
 #pragma once
 
+template <typename T, bool IsSigned, bool IsFloat> struct ValueTraitImpl;
+
+template <typename T> struct ValueTraitImpl<T, false, false> {
+public:
+  using UnsignedType = typename std::make_unsigned<T>::type;
+
+  static __device__ UnsignedType encode(T v) { return static_cast<UnsignedType>(v); }
+
+  static __device__ T decode(UnsignedType v) { return static_cast<T>(v); }
+
+  static bool needsAllBits() { return false; }
+};
+
+template <typename T> struct ValueTraitImpl<T, true, false> {
+public:
+  using UnsignedType = typename std::make_unsigned<T>::type;
+
+  static __device__ UnsignedType encode(T v) {
+    UnsignedType u = static_cast<UnsignedType>(v);
+    return u ^ (UnsignedType(1) << (sizeof(T) * 8 - 1));
+  }
+
+  static __device__ T decode(UnsignedType value) {
+    UnsignedType u = value ^ (UnsignedType(1) << (sizeof(T) * 8 - 1));
+    return static_cast<T>(u);
+  }
+
+  static bool needsAllBits() {
+    return true; // Must process all bits for signed bits
+  }
+};
+
+template <typename T> struct ValueTraitImpl<T, true, true> {
+public:
+  using UnsignedType = typename std::conditional<
+      sizeof(T) == 4, uint32_t,
+      typename std::conditional<sizeof(T) == 8, uint64_t, void>::type>::type;
+
+  static __device__ UnsignedType encode(T v) {
+    // Reinterpret the floating point bits as unsigned integer
+    UnsignedType u;
+
+    // Use union for type punning (safe in CUDA)
+    union {
+      T f;
+      UnsignedType u;
+    } converter;
+
+    converter.f = v;
+
+    if (converter.u & (UnsignedType(1) << (sizeof(T) * 8 - 1))) {
+      // Negative number: flip all bits
+      return ~converter.u;
+    } else {
+      // Positive number: flip the sign bit
+      return converter.u ^ (UnsignedType(1) << (sizeof(T) * 8 - 1));
+    }
+  }
+
+  static __device__ T decode(UnsignedType value) {
+    UnsignedType u;
+
+    // Reverse the transformation
+    if (value & (UnsignedType(1) << (sizeof(T) * 8 - 1))) {
+      // Was positive: flip the sign bit back
+      u = value ^ (UnsignedType(1) << (sizeof(T) * 8 - 1));
+    } else {
+      // Was negative: flip all bits back
+      u = ~value;
+    }
+
+    union {
+      T f;
+      UnsignedType u;
+    } converter;
+
+    converter.u = u;
+    return converter.f;
+  }
+
+  static bool needsAllBits() {
+    return true; // Must process all bits for signed bits
+  }
+};
+
+template <typename T>
+struct ValueTraits : ValueTraitImpl<T, std::is_signed<T>::value,
+                                    std::is_floating_point<T>::value> {};
+
+template <typename T>
+__global__ void encode_kernel(const T *inp_vals, typename ValueTraits<T>::UnsignedType *out_vals, uint32_t N) {
+  const int glb_idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+  if (glb_idx < N) {
+    out_vals[glb_idx] = ValueTraits<T>::encode(inp_vals[glb_idx]);
+  }
+}
+
+template <typename T>
+__global__ void decode_kernel(const typename ValueTraits<T>::UnsignedType *inp_vals, T* out_vals, uint32_t N) {
+  const int glb_idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (glb_idx < N) {
+    out_vals[glb_idx] = ValueTraits<T>::decode(inp_vals[glb_idx]);
+  }
+}
+
+
 template <typename UnsignedType, uint32_t H, uint32_t lgH, uint32_t Q>
 __global__ void initial_kernel(UnsignedType *inp_vals, uint32_t *hist,
                                uint32_t current_shift, uint32_t N) {
