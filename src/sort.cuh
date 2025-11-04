@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cuda_runtime.h>
+#include <memory>
 #include <stdexcept>
 #include <stdlib.h>
 #include <sys/types.h>
@@ -20,9 +21,10 @@ public:
     cudaMalloc((void **)&ptr_, count * sizeof(T));
   }
 
-  DeviceBuffer(size_t count, T* ptr) : size_(count) {
+  // No copy, take control
+  DeviceBuffer(T *ptr, size_t count) : size_(count) {
     cudaMalloc((void **)&ptr_, count * sizeof(T));
-    cudaMemcpy(ptr_, ptr, count * sizeof(T), cudaMemcpyDeviceToDevice);
+    cudaMemcpy(ptr_, ptr, size_ * sizeof(T), cudaMemcpyDeviceToDevice);
   }
 
   ~DeviceBuffer() {
@@ -41,7 +43,7 @@ public:
     other.size_ = 0;
   }
 
-  void swap(DeviceBuffer& other) noexcept {
+  void swap(DeviceBuffer &other) noexcept {
     std::swap(ptr_, other.ptr_);
     std::swap(size_, other.size_);
   }
@@ -92,6 +94,9 @@ private:
   DeviceBuffer<uint32_t> d_hist_scan_tr_tr_;
   DeviceBuffer<uint32_t> d_tmp_vals_;
 
+  // If non-unsigned, then keep pointer to original
+  T *d_original_vals_;
+
 public:
   RadixSorter(uint32_t N)
       : N_(N), num_blocks_((N + (B * Q) - 1) / (B * Q)),
@@ -107,19 +112,39 @@ public:
     block_ = dim3(TILE_SIZE, TILE_SIZE, 1);
     grid_forward_ = dim3(dimx, dimy, 1);
     grid_backward_ = dim3(dimy, dimx, 1);
-  
   }
 
-  RadixSorter(uint32_t N, T* inp_vals)
+  RadixSorter(uint32_t N, T *d_inp_vals)
+      : RadixSorter(N, d_inp_vals,
+                    std::integral_constant<bool, IsUnsignedInt>{}) {}
+
+private:
+  // If we are unsigned then we can preallocate the d_inp_vals with copy
+  RadixSorter(uint32_t N, T *d_inp_vals, std::true_type)
       : N_(N), num_blocks_((N + (B * Q) - 1) / (B * Q)),
         hist_size_(num_blocks_ * (1 << lgH)),
         shared_mem_size_((B * Q) * sizeof(UnsignedType) +
                          (2 * H + B) * sizeof(uint32_t)),
-        d_hist_(hist_size_),
-        d_inp_vals_(N, inp_vals),
-        d_out_vals_(N),
-        d_hist_scan_(hist_size_), d_hist_scan_tr_tr_(hist_size_),
-        d_tmp_vals_(hist_size_), initialized_(true) {
+        d_hist_(hist_size_), d_out_vals_(N), d_hist_scan_(hist_size_),
+        d_hist_scan_tr_tr_(hist_size_), d_tmp_vals_(hist_size_),
+        initialized_(true),
+        d_inp_vals_(reinterpret_cast<UnsignedType *>(d_inp_vals), N) {
+    // Setup grid dimensions
+    const int dimy = (num_blocks_ + TILE_SIZE - 1) / TILE_SIZE;
+    const int dimx = (H + TILE_SIZE - 1) / TILE_SIZE;
+    block_ = dim3(TILE_SIZE, TILE_SIZE, 1);
+    grid_forward_ = dim3(dimx, dimy, 1);
+    grid_backward_ = dim3(dimy, dimx, 1);
+  }
+  // If we are not unsigned, then we save the pointer to the original data
+  RadixSorter(uint32_t N, T *d_inp_vals, std::false_type)
+      : N_(N), num_blocks_((N + (B * Q) - 1) / (B * Q)),
+        hist_size_(num_blocks_ * (1 << lgH)),
+        shared_mem_size_((B * Q) * sizeof(UnsignedType) +
+                         (2 * H + B) * sizeof(uint32_t)),
+        d_hist_(hist_size_), d_out_vals_(N), d_hist_scan_(hist_size_),
+        d_hist_scan_tr_tr_(hist_size_), d_tmp_vals_(hist_size_),
+        initialized_(true), d_inp_vals_(N_) {
     // Setup grid dimensions
     const int dimy = (num_blocks_ + TILE_SIZE - 1) / TILE_SIZE;
     const int dimx = (H + TILE_SIZE - 1) / TILE_SIZE;
@@ -127,28 +152,55 @@ public:
     grid_forward_ = dim3(dimx, dimy, 1);
     grid_backward_ = dim3(dimy, dimx, 1);
 
-    // Pre-allocate encoding buffer
-    if constexpr (!IsUnsignedInt) {
-      throw std::logic_error("Can only pre-initialize with Unsigned int");
-    }
-    initialized_ = true;
+    d_original_vals_ = d_inp_vals;
   }
+public:
 
   int sort() {
     if (!initialized_) {
-      throw std::runtime_error("Not initialized with device buffer, when running sort()");
+      throw std::runtime_error(
+          "Not initialized with device buffer, when running sort()");
     }
-    return sortMain();
+    encode();
+    sortMain();
+    decode();
+    return 0;
   }
 
+  // This is called from host
   int sort(const T *inp_vals, T *out_vals) {
-    encodeInputCopy(inp_vals);
+    if constexpr (!IsUnsignedInt) {
+      cudaMalloc(d_original_vals_, N_);
+      cudaMemcpy(d_original_vals_, inp_vals, N_, cudaMemcpyHostToDevice);
+    }
+    encode();
     sortMain();
-    copyResultAndDecode(out_vals);
+    decode();
+    copyResult(out_vals);
     return 0;
   }
 
 private:
+  void __inline__ encode() {
+    if constexpr (!IsUnsignedInt) {
+      const int numBlocks = (N_ + B - 1) / B;
+      UnsignedType *d_out_vals = d_inp_vals_.get();
+      encode_kernel<T><<<numBlocks, B>>>(d_original_vals_, d_out_vals, N_);
+    }
+  }
+
+  void __inline__ decode() {
+    if constexpr (!IsUnsignedInt) {
+      const int numBlocks = (N_ + B - 1) / B;
+      UnsignedType *d_inp_vals = d_out_vals_.get();
+      decode_kernel<T><<<numBlocks, B>>>(d_inp_vals, d_original_vals_, N_);
+    }
+  }
+
+  void copyResult(T *out_vals) {
+    cudaMemcpy(out_vals, d_original_vals_, N_, cudaMemcpyDeviceToHost);
+  }
+
   int sortMain() {
     num_passes_ = calculateNumPasses();
     UnsignedType *d_current_input = d_inp_vals_.get();
@@ -163,31 +215,6 @@ private:
     }
 
     return 0;
-  }
-
-  void encodeInputCopy(const T *inp_vals) {
-    if constexpr (!IsUnsignedInt) {
-      const int numBlocks = (N_ + B - 1) / B;
-      UnsignedType *d_out_vals = d_inp_vals_.get();
-      DeviceBuffer<T>  d_inp_vals = DeviceBuffer<T>(N_);
-      d_inp_vals.copyToDevice(inp_vals);
-      encode_kernel<T><<<numBlocks, B>>>(d_inp_vals.get(), d_out_vals, N_);
-    } else {
-      d_inp_vals_.copyToDevice(
-          reinterpret_cast<const UnsignedType *>(inp_vals));
-    }
-  }
-
-  void copyResultAndDecode(T *out_vals) {
-    if constexpr (!IsUnsignedInt) {
-      const int numBlocks = (N_ + B - 1) / B;
-      UnsignedType *d_inp_vals = d_out_vals_.get();
-      DeviceBuffer<T> d_out_vals = DeviceBuffer<T>(N_);
-      decode_kernel<T><<<numBlocks, B>>>(d_inp_vals, d_out_vals.get(), N_);
-      d_out_vals.copyToHost(out_vals);
-    } else {
-      d_out_vals_.copyToHost(reinterpret_cast<UnsignedType *>(out_vals));
-    }
   }
 
   uint32_t __inline__ calculateNumPasses() {
@@ -212,14 +239,12 @@ private:
     transpose<TILE_SIZE><<<grid_backward_, block_>>>(
         d_hist_scan_.get(), d_hist_scan_tr_tr_.get(), H, num_blocks_);
 
-
     // Step 5: Reorder elements
     final_kernel<UnsignedType, H, lgH, B, Q>
         <<<num_blocks_, B, shared_mem_size_>>>(d_input, d_output, d_hist_.get(),
                                                d_hist_scan_tr_tr_.get(), pass,
                                                N_);
   }
-
 };
 
 template <typename T, uint32_t Q, uint32_t B, uint32_t lgH, uint32_t TILE_SIZE>
