@@ -37,3 +37,10 @@ This will:
 - Run the Futhark baseline
 
 All results are printed to the terminal.
+
+## Cleaning
+
+To clean the build artifacts, simply run: 
+```bash
+make clean
+```
