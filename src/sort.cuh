@@ -178,6 +178,18 @@ private:
     }
   }
 
+  void copyResultAndDecode(T *out_vals) {
+    if constexpr (!IsUnsignedInt) {
+      const int numBlocks = (N_ + B - 1) / B;
+      UnsignedType *d_inp_vals = d_out_vals_.get();
+      DeviceBuffer<T> d_out_vals = DeviceBuffer<T>(N_);
+      decode_kernel<T><<<numBlocks, B>>>(d_inp_vals, d_out_vals.get(), N_);
+      d_out_vals.copyToHost(out_vals);
+    } else {
+      d_out_vals_.copyToHost(reinterpret_cast<UnsignedType *>(out_vals));
+    }
+  }
+
   uint32_t __inline__ calculateNumPasses() {
     return (sizeof(T) * 8 + lgH - 1) / lgH;
   }
@@ -208,17 +220,6 @@ private:
                                                N_);
   }
 
-  void copyResultAndDecode(T *out_vals) {
-    if constexpr (!IsUnsignedInt) {
-      const int numBlocks = (N_ + B - 1) / B;
-      UnsignedType *d_inp_vals = d_out_vals_.get();
-      DeviceBuffer<T> d_out_vals = DeviceBuffer<T>(N_);
-      decode_kernel<T><<<numBlocks, B>>>(d_inp_vals, d_out_vals.get(), N_);
-      d_out_vals.copyToHost(out_vals);
-    } else {
-      d_out_vals_.copyToHost(reinterpret_cast<UnsignedType *>(out_vals));
-    }
-  }
 };
 
 template <typename T, uint32_t Q, uint32_t B, uint32_t lgH, uint32_t TILE_SIZE>
