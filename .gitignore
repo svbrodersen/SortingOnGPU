@@ -7,5 +7,5 @@
 src/main
 src/radix_test
 src/test_correctness
-src/data
+futhark/data
 cub-code-radixsort/bench_cub_like_futhark

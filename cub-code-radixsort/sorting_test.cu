@@ -1,21 +1,13 @@
 //#include "../../cub-1.8.0/cub/cub.cuh"   // or equivalently <cub/device/device_histogram.cuh>
 #include "cub/cub.cuh"
 #include "helper.cu.h"
+#include "../utils/utils.cuh"
 
-template<class Z>
-bool validateZ(Z* A, uint32_t sizeAB) {
-    for(uint32_t i = 1; i < sizeAB; i++)
-      if (A[i-1] > A[i]){
-        printf("INVALID RESULT for i:%d, (A[i-1]=%d > A[i]=%d)\n", i, A[i-1], A[i]);
-        return false;
-      }
-    return true;
-}
 
-void randomInitNat(uint32_t* data, const uint32_t size, const uint32_t H) {
+void randomInitNat(uint32_t* data, const uint32_t size) {
     for (int i = 0; i < size; ++i) {
-        unsigned long int r = rand();
-        data[i] = r % H;
+        unsigned long int r = randomValue<uint32_t>();
+        data[i] = r;
     }
 }
 
@@ -60,7 +52,6 @@ double sortRedByKeyCUB( uint32_t* data_keys_in
     }
     cudaDeviceSynchronize();
     cudaCheckError();
-
     gettimeofday(&t_end, NULL);
     timeval_subtract(&t_diff, &t_end, &t_start);
     elapsed = (t_diff.tv_sec*1e6+t_diff.tv_usec) / ((double)GPU_RUNS);
@@ -81,7 +72,7 @@ int main (int argc, char * argv[]) {
     //Allocate and Initialize Host data with random values
     uint32_t* h_keys  = (uint32_t*) malloc(N*sizeof(uint32_t));
     uint32_t* h_keys_res  = (uint32_t*) malloc(N*sizeof(uint32_t));
-    randomInitNat(h_keys, N, N/10);
+    randomInitNat(h_keys, N);
 
     //Allocate and Initialize Device data
     uint32_t* d_keys_in;

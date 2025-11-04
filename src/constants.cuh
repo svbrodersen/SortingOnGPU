@@ -6,7 +6,7 @@
 #include <sys/time.h>
 #include <time.h>
 
-#define DEBUG_INFO true
+#define DEBUG_INFO false
 
 #define lgWARP 5
 #define WARP (1 << lgWARP)
