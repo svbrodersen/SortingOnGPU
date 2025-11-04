@@ -7,28 +7,53 @@
 #include <iostream> // For std::cout, std::cerr, std::endl
 #include <limits>   // For std::numeric_limits
 #include <map>      // For std::map (element preservation and results)
-#include <string>   // For std::string
-#include <tuple>    // For std::tuple (to list types)
-#include <utility>  // For std::apply
-#include <vector>   // For std::vector (replaces malloc/free)
+#include <random>
+#include <string>  // For std::string
+#include <tuple>   // For std::tuple (to list types)
+#include <type_traits>
+#include <utility> // For std::apply
+#include <vector>  // For std::vector (replaces malloc/free)
 
-// CUDA Headers
 #include <cuda_runtime.h>
 
+const uint32_t Q = 22;
+const uint32_t B = 256;
+const uint32_t lgH = 8;
+const uint32_t TILE_SIZE = 32;
 
-template <typename T>
-struct TypeName {
-    static const char* value;
+template <typename T> struct TypeName {
+  static const char *value;
 };
-template <> const char* TypeName<uint32_t>::value = "uint32_t";
-template <> const char* TypeName<int32_t>::value  = "int32_t";
-template <> const char* TypeName<float>::value    = "float";
-template <> const char* TypeName<double>::value   = "double";
-template <> const char* TypeName<uint64_t>::value = "uint64_t";
-template <> const char* TypeName<uint16_t>::value = "uint16_t";
-template <> const char* TypeName<uint8_t>::value = "uint8_t";
-template <typename T> const char* TypeName<T>::value = "unknown"; // Fallback
+template <> const char *TypeName<uint32_t>::value = "uint32_t";
+template <> const char *TypeName<int32_t>::value = "int32_t";
+template <> const char *TypeName<int64_t>::value = "int64_t";
+template <> const char *TypeName<float>::value = "float";
+template <> const char *TypeName<double>::value = "double";
+template <> const char *TypeName<uint64_t>::value = "uint64_t";
+template <> const char *TypeName<uint16_t>::value = "uint16_t";
+template <> const char *TypeName<uint8_t>::value = "uint8_t";
+template <typename T> const char *TypeName<T>::value = "unknown"; // Fallback
 
+template <typename T> T randomValue() {
+  static thread_local std::mt19937_64 rng{42};
+
+  if constexpr (std::is_integral_v<T> && std::is_unsigned_v<T>) {
+    std::uniform_int_distribution<uint64_t> dist(std::numeric_limits<T>::min(),
+                                                 std::numeric_limits<T>::max());
+    return static_cast<T>(dist(rng));
+  } else if constexpr (std::is_integral_v<T> && std::is_signed_v<T>) {
+    std::uniform_int_distribution<int64_t> dist(std::numeric_limits<T>::min(),
+                                                std::numeric_limits<T>::max());
+    return static_cast<T>(dist(rng));
+  } else if constexpr (std::is_floating_point_v<T>) {
+    // Uniform over a wide range, avoiding infinities
+    std::uniform_real_distribution<long double> dist(
+        -1.0e308L, 1.0e308L); // covers most of double range safely
+    return static_cast<T>(dist(rng));
+  } else {
+    static_assert(!sizeof(T *), "Unsupported type for randomValue()");
+  }
+}
 
 template <typename T>
 void printArray(T *inp_vals, uint32_t N, const char *name) {
@@ -105,13 +130,9 @@ bool checkElementPreservation(T *original, T *sorted, uint32_t N) {
  */
 template <typename T> bool runTest(uint32_t N) {
   // Determine the type name for clearer output
-  const char* type_name = TypeName<T>::value;
+  const char *type_name = TypeName<T>::value;
 
   // 1. Define constants (same for both types, assuming 32-bit key)
-  const uint32_t Q = 22;
-  const uint32_t B = 256;
-  const uint32_t lgH = 8;
-  const uint32_t TILE_SIZE = 32;
   const uint32_t mem_size = N * sizeof(T);
 
   bool success = true;
@@ -135,7 +156,7 @@ template <typename T> bool runTest(uint32_t N) {
   // 3. Fill with random data
   for (uint32_t i = 0; i < N; i++) {
     // In reverse order,
-    inp_vals[i] = N - 50 - i;
+    inp_vals[i] = randomValue<T>();
   }
 
   // Add some edge cases based on the type
@@ -145,10 +166,10 @@ template <typename T> bool runTest(uint32_t N) {
     inp_vals[4] = 100;
     inp_vals[5] = 100;
 
-    if constexpr (std::is_same_v<T, uint32_t> || std::is_same_v<T, uint64_t>) {
+    if constexpr (std::is_unsigned_v<T>) {
       inp_vals[1] = std::numeric_limits<T>::max();
       inp_vals[3] = std::numeric_limits<T>::max();
-    } else if constexpr (std::is_same_v<T, int32_t>) { // int32_t
+    } else if constexpr (std::is_signed_v<T>) { 
       inp_vals[1] = std::numeric_limits<T>::max();
       inp_vals[3] = std::numeric_limits<T>::max();
       // Add a negative number
@@ -157,13 +178,15 @@ template <typename T> bool runTest(uint32_t N) {
       if (N > 7)
         inp_vals[7] = -100;
     } else if constexpr (std::is_same_v<T, float_t> ||
-                         std::is_same_v<T, double>) { // int32_t
-      if (N > 20) {
-        inp_vals[N - 20] = (T)-1000;
-      }
-      inp_vals[N - N % 30] = (T)-1337;
-      inp_vals[N - N % 20] = (T)-1555;
-      inp_vals[N - (N / 2)] = std::numeric_limits<T>::max();
+                         std::is_same_v<T, double>) { 
+      inp_vals[0] = 0;
+      inp_vals[1] = -0.0;
+      inp_vals[2] = std::numeric_limits<T>::infinity();
+      inp_vals[3] = -std::numeric_limits<T>::infinity();
+      inp_vals[4] = std::numeric_limits<T>::lowest();
+      inp_vals[5] = std::numeric_limits<T>::max();
+      inp_vals[6] = static_cast<T>(N) * 0.123;
+      inp_vals[7] = static_cast<T>(-N) * 0.456;
     }
   }
 
@@ -245,14 +268,16 @@ int main() {
 
   srand(42);
 
-  int N_sizes = 5;
-  int test_sizes[] = {10, 100, 1024, 10000, 1000000};
+  int N_sizes = 6;
+  int test_sizes[] = {
+      10, 100, 1024, 5000, 10000, 1000000
+  };
 
   int total_tests = 0;
   int total_passed = 0;
 
   using TestTypes =
-      std::tuple<uint32_t, int32_t, float, double, uint64_t, uint16_t, uint8_t>;
+      std::tuple<uint32_t, int32_t, int64_t, float, double, uint64_t, uint16_t, uint8_t>;
   std::map<std::string, int> results;
 
   std::apply(
