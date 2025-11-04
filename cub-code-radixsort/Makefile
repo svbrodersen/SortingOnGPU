@@ -5,7 +5,7 @@ ELEMS_PER_THREAD ?= 24
 all: cub-sort
 
 build: sorting_test.cu helper.cu.h
-	$(COMPILER) $(OPT_FLAGS) -o test-cub sorting_test.cu
+	$(COMPILER) $(OPT_FLAGS) -DELEMS_PER_THREAD=$(ELEMS_PER_THREAD) -o test-cub sorting_test.cu
 
 run: build
 	./test-cub 100000000
