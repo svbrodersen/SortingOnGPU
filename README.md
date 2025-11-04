@@ -17,7 +17,7 @@ This will:
 - Validate correctness across multiple datatypes and array sizes
 - Run the full benchmark from `main.cu` and print timings for several `n`
 
-If you want to run them separately:\\
+If you want to run them separately:
 ```bash
 make validate
 make benchmark
