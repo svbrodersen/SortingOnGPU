@@ -182,7 +182,7 @@ __device__ void partition2_by_bit(UnsignedType *s_inp, UnsignedType reg_mem[Q],
 
   __syncthreads();
 
-  // inclusive scatter
+  // inclusive scan
   uint32_t res = scanIncBlock<Add<uint32_t>>(s_scan_storage, thid);
   __syncthreads();
   s_scan_storage[thid] = res;
@@ -191,20 +191,19 @@ __device__ void partition2_by_bit(UnsignedType *s_inp, UnsignedType reg_mem[Q],
 
   // Scatter into shared array.
   uint32_t count_zero = 0;
-  uint32_t count_one = 0;
   uint32_t inclusive_zero = s_scan_storage[thid];
-  uint32_t exclusive_zero = inclusive_zero - S;
+  uint32_t zeros_before = inclusive_zero - S;
+  uint32_t ones_before = thid * Q - zeros_before;
 #pragma unroll
   for (int q = 0; q < Q; q++) {
     UnsignedType elm = reg_mem[q];
-    uint32_t bit_is_0 = 1u - ((elm >> current_bit) & 1u);
-    if (bit_is_0 == 1) {
-      s_inp[exclusive_zero + count_zero] = elm;
-      count_zero++;
+    uint32_t bit_is_1 = ((elm >> current_bit) & 1u);
+    if (bit_is_1) {
+      uint32_t count_one = q - count_zero;
+      s_inp[total_zeros + ones_before + count_one] = elm;
     } else {
-      uint32_t exclusive_one = thid * Q - exclusive_zero;
-      s_inp[total_zeros + exclusive_one + count_one] = elm;
-      count_one++;
+      s_inp[zeros_before + count_zero] = elm;
+      count_zero++;
     }
   }
   __syncthreads();
