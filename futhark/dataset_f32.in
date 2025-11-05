@@ -1,0 +1,10 @@
+==
+entry: sort_f32
+"f32 n=1_000"       random input { [1000]f32 }
+"f32 n=10_000"      random input { [10000]f32 }
+"f32 n=100_000"     random input { [100000]f32 }
+"f32 n=1_000_000"   random input { [1000000]f32 }
+"f32 n=2_000_000"   random input { [2000000]f32 }
+"f32 n=5_000_000"   random input { [5000000]f32 }
+"f32 n=10_000_000"  random input { [10000000]f32 }
+"f32 n=100_000_000" random input { [100000000]f32 }
