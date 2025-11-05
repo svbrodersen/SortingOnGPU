@@ -20,16 +20,16 @@ make benchmark
 
 ---
 
-## How to run all benchmarks (CUDA + CUB + Futhark)
+## How to run all benchmarks (CUB + Futhark + OURS)
 To build and run everything including CUB and Futhark:
 ```bash
 make plus
 ```
 
 This will:
-- Build and run our CUDA implementation 
 - Build and run the CUB baseline 
 - Run the Futhark baseline
+- Build and run our CUDA implementation 
 
 All results are printed to the terminal.
 

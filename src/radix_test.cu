@@ -1,5 +1,5 @@
-#include "sort.cuh"
 #include "../utils/utils.cuh"
+#include "sort.cuh"
 
 // C++ Standard Library Headers
 #include <cstdint>
@@ -8,8 +8,8 @@
 #include <limits>   // For std::numeric_limits
 #include <map>      // For std::map (element preservation and results)
 #include <random>
-#include <string>  // For std::string
-#include <tuple>   // For std::tuple (to list types)
+#include <string> // For std::string
+#include <tuple>  // For std::tuple (to list types)
 #include <type_traits>
 #include <utility> // For std::apply
 #include <vector>  // For std::vector (replaces malloc/free)
@@ -92,7 +92,7 @@ template <typename T> bool runTest(uint32_t N) {
     if constexpr (std::is_unsigned_v<T>) {
       inp_vals[1] = std::numeric_limits<T>::max();
       inp_vals[3] = std::numeric_limits<T>::max();
-    } else if constexpr (std::is_signed_v<T>) { 
+    } else if constexpr (std::is_signed_v<T>) {
       inp_vals[1] = std::numeric_limits<T>::max();
       inp_vals[3] = std::numeric_limits<T>::max();
       // Add a negative number
@@ -101,7 +101,7 @@ template <typename T> bool runTest(uint32_t N) {
       if (N > 7)
         inp_vals[7] = -100;
     } else if constexpr (std::is_same_v<T, float_t> ||
-                         std::is_same_v<T, double>) { 
+                         std::is_same_v<T, double>) {
       inp_vals[0] = 0;
       inp_vals[1] = -0.0;
       inp_vals[2] = std::numeric_limits<T>::infinity();
@@ -160,21 +160,15 @@ template <typename T> int runAllTests(int *test_sizes, int N) {
 }
 
 int main() {
-  cudaSetDevice(1);
-  initHwd();
-
-  srand(42);
-
+  initializeDeviceOnce();
   int N_sizes = 6;
-  int test_sizes[] = {
-      10, 100, 1024, 5000, 10000, 1000000
-  };
+  int test_sizes[] = {10, 100, 1024, 5000, 10000, 1000000};
 
   int total_tests = 0;
   int total_passed = 0;
 
-  using TestTypes =
-      std::tuple<uint32_t, int32_t, int64_t, float, double, uint64_t, uint16_t, uint8_t>;
+  using TestTypes = std::tuple<uint32_t, int32_t, int64_t, float, double,
+                               uint64_t, uint16_t, uint8_t>;
   std::map<std::string, int> results;
 
   std::apply(
@@ -199,7 +193,8 @@ int main() {
     total_tests += N_sizes;
   }
 
-  printf("**Total Tests: Passed %d out of %d tests.**\n", total_passed, total_tests);
+  printf("**Total Tests: Passed %d out of %d tests.**\n", total_passed,
+         total_tests);
   printf("====================================================\n");
 
   // Return 0 if all tests passed, 1 otherwise

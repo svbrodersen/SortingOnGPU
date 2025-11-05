@@ -86,8 +86,8 @@ void runBenchmarkForSize(uint32_t N, const char *typeName) {
   free(sorted_array);
 
   elapsed /= GPU_RUNS;
-  printf("Our sorting (%s) for N=%lu runs in: %.2f us, VALID: %d\n", typeName,
-         N, elapsed, valid);
+  printf("Our sorting for N=%lu runs in: %.2f us, VALID: %d, TYPE %s\n", 
+         N, elapsed, valid, typeName);
 }
 
 int main(int argc, char *argv[]) {

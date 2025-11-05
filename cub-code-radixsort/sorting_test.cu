@@ -87,8 +87,8 @@ bool runSortingTest(const uint64_t N, const char* typeName) {
     cudaCheckError();
     
     bool success = validateZ(h_keys_res, N);
-    printf("CUB Sorting (%s) for N=%lu runs in: %.2f us, VALID: %d\n", 
-           typeName, N, elapsed, success);
+    printf("CUB Sorting for N=%lu runs in: %.2f us, VALID: %d, TYPE: %s \n", 
+           N, elapsed, success, typeName);
     
     // Cleanup
     cudaFree(d_keys_in); 
