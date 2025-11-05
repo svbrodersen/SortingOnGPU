@@ -100,6 +100,7 @@ bool runSortingTest(const uint64_t N, const char* typeName) {
 }
 
 int main (int argc, char * argv[]) {
+    initializeDeviceOnce();
     if (argc != 2) {
         printf("Usage: %s <size-of-array>\n", argv[0]);
         exit(1);

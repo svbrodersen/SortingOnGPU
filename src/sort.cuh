@@ -23,8 +23,7 @@ public:
   }
 
   // No copy, take control
-  DeviceBuffer(T *ptr, size_t count) : size_(count), ptr_(ptr), owned_(false) {
-  }
+  DeviceBuffer(T *ptr, size_t count) : size_(count), ptr_(ptr), owned_(false) {}
 
   ~DeviceBuffer() {
     if (ptr_ && owned_)
@@ -92,7 +91,6 @@ private:
   // Device buffers
   DeviceBuffer<uint32_t> d_hist_;
   DeviceBuffer<uint32_t> d_hist_scan_;
-  DeviceBuffer<uint32_t> d_hist_scan_tr_tr_;
   DeviceBuffer<uint32_t> d_tmp_vals_;
 
   // If non-unsigned, then keep pointer to original
@@ -105,8 +103,8 @@ public:
         shared_mem_size_((B * Q) * sizeof(UnsignedType) +
                          (2 * H + B) * sizeof(uint32_t)),
         d_inp_vals_(N), d_out_vals_(N), d_hist_(hist_size_),
-        d_hist_scan_(hist_size_), d_hist_scan_tr_tr_(hist_size_),
-        d_tmp_vals_(hist_size_), initialized_(false), d_original_vals_(nullptr) {
+        d_hist_scan_(hist_size_), d_tmp_vals_(hist_size_), initialized_(false),
+        d_original_vals_(nullptr) {
     // Setup grid dimensions
     const int dimy = (num_blocks_ + TILE_SIZE - 1) / TILE_SIZE;
     const int dimx = (H + TILE_SIZE - 1) / TILE_SIZE;
@@ -127,8 +125,7 @@ private:
         shared_mem_size_((B * Q) * sizeof(UnsignedType) +
                          (2 * H + B) * sizeof(uint32_t)),
         d_hist_(hist_size_), d_out_vals_(N), d_hist_scan_(hist_size_),
-        d_hist_scan_tr_tr_(hist_size_), d_tmp_vals_(hist_size_),
-        initialized_(true),d_original_vals_(nullptr),
+        d_tmp_vals_(hist_size_), initialized_(true), d_original_vals_(nullptr),
         d_inp_vals_(reinterpret_cast<UnsignedType *>(d_inp_vals), N) {
     // Setup grid dimensions
     const int dimy = (num_blocks_ + TILE_SIZE - 1) / TILE_SIZE;
@@ -144,8 +141,7 @@ private:
         shared_mem_size_((B * Q) * sizeof(UnsignedType) +
                          (2 * H + B) * sizeof(uint32_t)),
         d_hist_(hist_size_), d_out_vals_(N), d_hist_scan_(hist_size_),
-        d_hist_scan_tr_tr_(hist_size_), d_tmp_vals_(hist_size_),
-        initialized_(true), d_inp_vals_(N_) {
+        d_tmp_vals_(hist_size_), initialized_(true), d_inp_vals_(N_) {
     // Setup grid dimensions
     const int dimy = (num_blocks_ + TILE_SIZE - 1) / TILE_SIZE;
     const int dimx = (H + TILE_SIZE - 1) / TILE_SIZE;
@@ -155,8 +151,9 @@ private:
 
     d_original_vals_ = d_inp_vals;
   }
-public:
 
+public:
+  // This is called when we have initialised with device input
   int sort() {
     if (!initialized_) {
       throw std::runtime_error(
@@ -168,11 +165,12 @@ public:
     return 0;
   }
 
-  // This is called from host
+  // This is called with host input
   int sort(const T *inp_vals, T *out_vals) {
     if constexpr (!IsUnsignedInt) {
       cudaMalloc((void **)&d_original_vals_, N_ * sizeof(T));
-      cudaMemcpy(d_original_vals_, inp_vals, N_ * sizeof(T), cudaMemcpyHostToDevice);
+      cudaMemcpy(d_original_vals_, inp_vals, N_ * sizeof(T),
+                 cudaMemcpyHostToDevice);
     } else {
       d_inp_vals_.copyToDevice(inp_vals);
     }
@@ -206,9 +204,11 @@ private:
 
   void copyResult(T *out_vals) {
     if constexpr (!IsUnsignedInt) {
-      cudaMemcpy(out_vals, d_original_vals_, N_ * sizeof(T), cudaMemcpyDeviceToHost);
+      cudaMemcpy(out_vals, d_original_vals_, N_ * sizeof(T),
+                 cudaMemcpyDeviceToHost);
     } else {
-      cudaMemcpy(out_vals, d_out_vals_.get(), N_ * sizeof(UnsignedType), cudaMemcpyDeviceToHost);
+      cudaMemcpy(out_vals, d_out_vals_.get(), N_ * sizeof(UnsignedType),
+                 cudaMemcpyDeviceToHost);
     }
   }
 
@@ -248,13 +248,12 @@ private:
 
     // Step 4: Transpose back (H × num_blocks -> num_blocks × H)
     transpose<TILE_SIZE><<<grid_backward_, block_>>>(
-        d_hist_scan_.get(), d_hist_scan_tr_tr_.get(), H, num_blocks_);
+        d_hist_scan_.get(), d_tmp_vals_.get(), H, num_blocks_);
 
     // Step 5: Reorder elements
     final_kernel<UnsignedType, H, lgH, B, Q>
         <<<num_blocks_, B, shared_mem_size_>>>(d_input, d_output, d_hist_.get(),
-                                               d_hist_scan_tr_tr_.get(), pass,
-                                               N_);
+                                               d_tmp_vals_.get(), pass, N_);
   }
 };
 

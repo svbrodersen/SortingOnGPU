@@ -1,7 +1,6 @@
 #ifndef HOSTSKEL_H
 #define HOSTSKEL_H
 
-#include "constants.cuh"
 #include "pbb_kernels.cuh"
 
 #define CUDASSERT(code)                                                        \

@@ -220,7 +220,6 @@ __device__ void partition2_by_bit(UnsignedType *s_inp, UnsignedType reg_mem[Q],
       reg_mem[q] = s_inp[loc_pos];
     }
   }
-  __syncthreads();
 }
 
 template <typename T> __host__ __device__ constexpr T type_max() {
@@ -243,7 +242,7 @@ __global__ void final_kernel(UnsignedType *inp_vals, UnsignedType *out_vals,
   uint32_t *s_local_scanned = s_local_hist + H;     // size H
   uint32_t *s_scan_storage = s_local_scanned + H;   // size B (for helpers)
 
-  // --- Step 1: Copy Q*B elements to shared memory  ---
+  // Step 1: Copy Q*B elements to shared memory  ---
   const uint32_t block_start = block_id * N;
   UnsignedType reg_mem[Q];
 
@@ -265,7 +264,7 @@ __global__ void final_kernel(UnsignedType *inp_vals, UnsignedType *out_vals,
     reg_mem[q] = s_inp[local_idx];
   }
 
-  // --- Step 2: Loop of size lgH for two-way partitioning  ---
+  // Step 2: Loop of size lgH for two-way partitioning 
   // (This performs an in-block radix sort)
   for (uint32_t k = 0; k < lgH; k++) {
     uint32_t current_bit = (current_shift * lgH + k);
@@ -276,7 +275,7 @@ __global__ void final_kernel(UnsignedType *inp_vals, UnsignedType *out_vals,
     __syncthreads();
   }
 
-  // --- Step 3: After the loop  ---
+  // Step 3: After the loop 
 
   // 3.1: Copy original and scanned histograms to shared memory
   for (uint32_t i = thid; i < H; i += B) {

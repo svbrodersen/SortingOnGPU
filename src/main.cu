@@ -34,15 +34,6 @@ template <typename T> void randomInitNat(T *data, const uint32_t size) {
   }
 }
 
-void initializeDeviceOnce() {
-  static bool initialized = false;
-  if (!initialized) {
-    cudaSetDevice(1);
-    initHwd();
-
-    initialized = true;
-  }
-}
 
 template <typename T>
 void runBenchmarkForSize(uint32_t N, const char *typeName) {

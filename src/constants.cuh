@@ -1,6 +1,7 @@
 #ifndef CONSTANTS_H
 #define CONSTANTS_H
 
+#include "../utils/utils.cuh"
 #include "stdio.h"
 #include <stdint.h>
 #include <sys/time.h>
@@ -17,29 +18,6 @@
 #ifndef ELEMS_PER_THREAD
 #define ELEMS_PER_THREAD 24
 #endif
-
-uint32_t MAX_HWDTH;
-uint32_t MAX_BLOCK;
-uint32_t MAX_SHMEM;
-
-cudaDeviceProp prop;
-
-void initHwd() {
-  int nDevices;
-  cudaGetDeviceCount(&nDevices);
-  cudaGetDeviceProperties(&prop, 0);
-  MAX_HWDTH = prop.maxThreadsPerMultiProcessor * prop.multiProcessorCount;
-  MAX_BLOCK = prop.maxThreadsPerBlock;
-  MAX_SHMEM = prop.sharedMemPerBlock;
-
-  if (DEBUG_INFO) {
-    printf("Device name: %s\n", prop.name);
-    printf("Number of hardware threads: %d\n", MAX_HWDTH);
-    printf("Max block size: %d\n", MAX_BLOCK);
-    printf("Shared memory size: %d\n", MAX_SHMEM);
-    puts("====");
-  }
-}
 
 int timeval_subtract(struct timeval *result, struct timeval *t2,
                      struct timeval *t1) {

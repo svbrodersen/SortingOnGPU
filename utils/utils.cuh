@@ -2,10 +2,12 @@
 #include <random>
 
 #define GPU_RUNS 400
+#define SEED 42
+#define DEBUG_INFO false
 
 #pragma once
 template <typename T> T randomValue() {
-  static thread_local std::mt19937_64 rng{42};
+  static thread_local std::mt19937_64 rng{SEED};
 
   if constexpr (std::is_integral_v<T> && std::is_unsigned_v<T>) {
     std::uniform_int_distribution<uint64_t> dist(std::numeric_limits<T>::min(),
@@ -89,4 +91,37 @@ bool checkElementPreservation(T *original, T *sorted, uint32_t N) {
     }
   }
   return true;
+}
+
+uint32_t MAX_HWDTH;
+uint32_t MAX_BLOCK;
+uint32_t MAX_SHMEM;
+
+cudaDeviceProp prop;
+
+void initHwd() {
+  int nDevices;
+  cudaGetDeviceCount(&nDevices);
+  cudaGetDeviceProperties(&prop, 0);
+  MAX_HWDTH = prop.maxThreadsPerMultiProcessor * prop.multiProcessorCount;
+  MAX_BLOCK = prop.maxThreadsPerBlock;
+  MAX_SHMEM = prop.sharedMemPerBlock;
+
+  if (DEBUG_INFO) {
+    printf("Device name: %s\n", prop.name);
+    printf("Number of hardware threads: %d\n", MAX_HWDTH);
+    printf("Max block size: %d\n", MAX_BLOCK);
+    printf("Shared memory size: %d\n", MAX_SHMEM);
+    puts("====");
+  }
+}
+
+void initializeDeviceOnce() {
+  static bool initialized = false;
+  if (!initialized) {
+    cudaSetDevice(1);
+    initHwd();
+
+    initialized = true;
+  }
 }
