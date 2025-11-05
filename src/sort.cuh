@@ -40,11 +40,13 @@ public:
       : ptr_(other.ptr_), size_(other.size_) {
     other.ptr_ = nullptr;
     other.size_ = 0;
+    other.owned_ = false;
   }
 
   void swap(DeviceBuffer &other) noexcept {
     std::swap(ptr_, other.ptr_);
     std::swap(size_, other.size_);
+    std::swap(owned_, other.owned_);
   }
 
   T *get() { return ptr_; }
@@ -104,7 +106,7 @@ public:
                          (2 * H + B) * sizeof(uint32_t)),
         d_inp_vals_(N), d_out_vals_(N), d_hist_(hist_size_),
         d_hist_scan_(hist_size_), d_hist_scan_tr_tr_(hist_size_),
-        d_tmp_vals_(hist_size_), initialized_(false) {
+        d_tmp_vals_(hist_size_), initialized_(false), d_original_vals_(nullptr) {
     // Setup grid dimensions
     const int dimy = (num_blocks_ + TILE_SIZE - 1) / TILE_SIZE;
     const int dimx = (H + TILE_SIZE - 1) / TILE_SIZE;
@@ -126,7 +128,7 @@ private:
                          (2 * H + B) * sizeof(uint32_t)),
         d_hist_(hist_size_), d_out_vals_(N), d_hist_scan_(hist_size_),
         d_hist_scan_tr_tr_(hist_size_), d_tmp_vals_(hist_size_),
-        initialized_(true),
+        initialized_(true),d_original_vals_(nullptr),
         d_inp_vals_(reinterpret_cast<UnsignedType *>(d_inp_vals), N) {
     // Setup grid dimensions
     const int dimy = (num_blocks_ + TILE_SIZE - 1) / TILE_SIZE;
@@ -169,13 +171,19 @@ public:
   // This is called from host
   int sort(const T *inp_vals, T *out_vals) {
     if constexpr (!IsUnsignedInt) {
-      cudaMalloc(d_original_vals_, N_);
-      cudaMemcpy(d_original_vals_, inp_vals, N_, cudaMemcpyHostToDevice);
+      cudaMalloc((void **)&d_original_vals_, N_ * sizeof(T));
+      cudaMemcpy(d_original_vals_, inp_vals, N_ * sizeof(T), cudaMemcpyHostToDevice);
+    } else {
+      d_inp_vals_.copyToDevice(inp_vals);
     }
     encode();
     sortMain();
     decode();
     copyResult(out_vals);
+    if constexpr (!IsUnsignedInt) {
+      cudaFree(d_original_vals_);
+      d_original_vals_ = nullptr;
+    }
     return 0;
   }
 
@@ -197,7 +205,11 @@ private:
   }
 
   void copyResult(T *out_vals) {
-    cudaMemcpy(out_vals, d_original_vals_, N_, cudaMemcpyDeviceToHost);
+    if constexpr (!IsUnsignedInt) {
+      cudaMemcpy(out_vals, d_original_vals_, N_ * sizeof(T), cudaMemcpyDeviceToHost);
+    } else {
+      cudaMemcpy(out_vals, d_out_vals_.get(), N_ * sizeof(UnsignedType), cudaMemcpyDeviceToHost);
+    }
   }
 
   int sortMain() {
