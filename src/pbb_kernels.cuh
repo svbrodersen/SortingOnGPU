@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cuda_runtime.h>
+#include "../utils/utils.cuh"
 
 /**
  * Naive memcpy kernel, for the purpose of comparing with

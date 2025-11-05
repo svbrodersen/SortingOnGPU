@@ -2,6 +2,7 @@
 #define HOSTSKEL_H
 
 #include "pbb_kernels.cuh"
+#include "../utils/utils.cuh"
 
 #define CUDASSERT(code)                                                        \
   {                                                                            \

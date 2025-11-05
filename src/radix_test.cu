@@ -1,4 +1,3 @@
-#include "constants.cuh"
 #include "sort.cuh"
 #include "../utils/utils.cuh"
 

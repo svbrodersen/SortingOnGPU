@@ -20,10 +20,10 @@ bench: $(MAIN)
 		./main $$N; \
 	done; \
 
-$(MAIN): main.cu host_skel.cuh pbb_kernels.cuh kernels.cuh sort.cuh constants.cuh
+$(MAIN): main.cu host_skel.cuh pbb_kernels.cuh kernels.cuh sort.cuh ../utils/utils.cuh
 	$(COMPILER) $(OPT_FLAGS) -DELEMS_PER_THREAD=$(ELEMS_PER_THREAD) -o $(MAIN) $<
 
-$(MAIN_TEST): radix_test.cu host_skel.cuh pbb_kernels.cuh kernels.cuh sort.cuh
+$(MAIN_TEST): radix_test.cu host_skel.cuh pbb_kernels.cuh kernels.cuh sort.cuh ../utils/utils.cuh
 	$(COMPILER) $(OPT_FLAGS) -DELEMS_PER_THREAD=$(ELEMS_PER_THREAD) -o $(MAIN_TEST) $<
 
 clean:

@@ -1,12 +1,10 @@
 #include "../utils/utils.cuh"
-#include "constants.cuh" // timeval_subtract is assumed to be here
 #include "sort.cuh"
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <cuda_runtime.h>
-#include <iostream>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/time.h>
@@ -33,7 +31,6 @@ template <typename T> void randomInitNat(T *data, const uint32_t size) {
     data[i] = randomValue<T>();
   }
 }
-
 
 template <typename T>
 void runBenchmarkForSize(uint32_t N, const char *typeName) {

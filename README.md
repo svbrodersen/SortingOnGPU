@@ -2,18 +2,13 @@
 
 ## How to run our CUDA validation and benchmarking
 ### Compile and Run (from repository root)
-Load modules first
-```bash
-module load cuda;
-module load futhark;
-```
-
-Then:
+Run:
 ```bash
 make
 ```
 
 This will:
+- Load modules futhark and cuda.
 - Validate correctness across multiple datatypes and array sizes
 - Run the full benchmark from `main.cu` and print timings for several `n`
 
@@ -44,3 +39,8 @@ To clean the build artifacts, simply run:
 ```bash
 make clean
 ```
+
+## Notes
+
+Inside ./utils/utils.cuh DEVICE_NUMBER is used to define which device to run
+the implementations on. Make sure this value is set to a valid device.

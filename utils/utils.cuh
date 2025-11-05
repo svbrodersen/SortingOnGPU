@@ -1,11 +1,18 @@
 #include <map>
 #include <random>
 
+#pragma once
+
 #define GPU_RUNS 400
 #define SEED 42
 #define DEBUG_INFO false
+#define DEVICE_NUMBER 0
 
-#pragma once
+#define DEBUG_INFO false
+
+#define lgWARP 5
+#define WARP (1 << lgWARP)
+
 template <typename T> T randomValue() {
   static thread_local std::mt19937_64 rng{SEED};
 
@@ -119,9 +126,28 @@ void initHwd() {
 void initializeDeviceOnce() {
   static bool initialized = false;
   if (!initialized) {
-    cudaSetDevice(1);
+    int deviceCount = 0;
+    cudaGetDeviceCount(&deviceCount);
+    if (DEVICE_NUMBER < deviceCount)
+    {
+      cudaSetDevice(DEVICE_NUMBER);
+    }
+    else
+    {
+      printf("error: invalid device choosen\n");
+    }
     initHwd();
-
     initialized = true;
   }
+}
+
+
+int timeval_subtract(struct timeval *result, struct timeval *t2,
+                     struct timeval *t1) {
+  uint32_t resolution = 1000000;
+  int64_t diff = (t2->tv_usec + resolution * t2->tv_sec) -
+                 (t1->tv_usec + resolution * t1->tv_sec);
+  result->tv_sec = diff / resolution;
+  result->tv_usec = diff % resolution;
+  return (diff < 0);
 }
