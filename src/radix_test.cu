@@ -47,62 +47,6 @@ void printArray(T *inp_vals, uint32_t N, const char *name) {
   std::cout << "]\n";
 }
 
-template <typename T>
-bool checkElementPreservation(T *original, T *sorted, uint32_t N) {
-  // The map key must be large enough to hold T, or simply use T.
-  std::map<T, int> original_counts;
-  std::map<T, int> sorted_counts;
-
-  // Count frequencies in original array
-  for (uint32_t i = 0; i < N; i++) {
-    original_counts[original[i]]++;
-  }
-
-  // Count frequencies in sorted array
-  for (uint32_t i = 0; i < N; i++) {
-    sorted_counts[sorted[i]]++;
-  }
-
-  // Compare the maps
-  if (original_counts.size() != sorted_counts.size()) {
-    printf("ERROR: Frequency map size mismatch. Original unique: %lu, Sorted "
-           "unique: %lu\n",
-           original_counts.size(), sorted_counts.size());
-    return false;
-  }
-
-  // Iterate and compare counts
-  for (auto const &[key, original_count] : original_counts) {
-    if (sorted_counts.find(key) == sorted_counts.end()) {
-      // Use appropriate format specifier for the key
-      if constexpr (std::is_same_v<T, uint32_t>) {
-        printf("ERROR: Element %u from original array is missing in sorted "
-               "array.\n",
-               key);
-      } else {
-        printf("ERROR: Element %d from original array is missing in sorted "
-               "array.\n",
-               key);
-      }
-      return false;
-    }
-    int sorted_count = sorted_counts[key];
-    if (sorted_count != original_count) {
-      if constexpr (std::is_same_v<T, uint32_t>) {
-        printf(
-            "ERROR: Element count mismatch for %u. Original: %d, Sorted: %d\n",
-            key, original_count, sorted_count);
-      } else {
-        printf(
-            "ERROR: Element count mismatch for %d. Original: %d, Sorted: %d\n",
-            key, original_count, sorted_count);
-      }
-      return false;
-    }
-  }
-  return true;
-}
-
 /**
  * @brief Runs a single test case for a given array size N.
  * @param N The number of elements to sort.
@@ -181,33 +125,7 @@ template <typename T> bool runTest(uint32_t N) {
 
   // 6. Verification 1: Check if sorted
   if (success) {
-    bool sorted = true;
-    for (uint32_t i = 0; i < N - 1; i++) {
-      if (out_vals[i] > out_vals[i + 1]) {
-        sorted = false;
-
-        // Use type-appropriate printing
-        if constexpr (std::is_same_v<T, uint32_t>) {
-          printf("ERROR: Sort failed at index %u: %u > %u\n", i, out_vals[i],
-                 out_vals[i + 1]);
-        } else {
-          printf("ERROR: Sort failed at index %u: %d > %d\n", i, out_vals[i],
-                 out_vals[i + 1]);
-        }
-
-        // Print surrounding elements for context
-        printf("... Context ...\n");
-        uint32_t start = (i > 5) ? (i - 5) : 0;
-        uint32_t end = (i + 5 < N) ? (i + 5) : N;
-        printArray<T>(out_vals + start, end - start, "out_vals");
-        printf("... End Context ...\n");
-
-        break;
-      }
-    }
-    if (!sorted) {
-      success = false;
-    }
+    validateZ<T>(out_vals, N);
   }
 
   // 7. Verification 2: Element Preservation

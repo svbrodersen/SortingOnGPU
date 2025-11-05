@@ -15,20 +15,19 @@ template <typename T> class DeviceBuffer {
 private:
   T *ptr_;
   size_t size_;
+  bool owned_;
 
 public:
-  DeviceBuffer(size_t count) : size_(count) {
+  DeviceBuffer(size_t count) : size_(count), owned_(true) {
     cudaMalloc((void **)&ptr_, count * sizeof(T));
   }
 
   // No copy, take control
-  DeviceBuffer(T *ptr, size_t count) : size_(count) {
-    cudaMalloc((void **)&ptr_, count * sizeof(T));
-    cudaMemcpy(ptr_, ptr, size_ * sizeof(T), cudaMemcpyDeviceToDevice);
+  DeviceBuffer(T *ptr, size_t count) : size_(count), ptr_(ptr), owned_(false) {
   }
 
   ~DeviceBuffer() {
-    if (ptr_)
+    if (ptr_ && owned_)
       cudaFree(ptr_);
   }
 
