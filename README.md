@@ -2,13 +2,18 @@
 
 ## How to run our CUDA validation and benchmarking
 ### Compile and Run (from repository root)
+### Load modules first
+```bash
+module load cuda;
+module load futhark;
+```
+
 Run:
 ```bash
 make
 ```
 
 This will:
-- Load modules futhark and cuda.
 - Validate correctness across multiple datatypes and array sizes
 - Run the full benchmark from `main.cu` and print timings for several `n`
 

@@ -12,13 +12,10 @@ NVCC := nvcc
 FUTHARK := futhark
 
 
-.PHONY: benchmark cub-bench futhark-bench validate clean module_load
+.PHONY: benchmark cub-bench futhark-bench validate clean 
 
-all: module_load validate benchmark 
+all: validate benchmark 
 
-module_load:
-	module load cuda;
-	module load futhark;
 
 clean:
 	$(MAKE) -C $(SUBDIR) clean
@@ -41,4 +38,4 @@ futhark-bench:
 	@echo "Running Futhark benchmark"
 	$(MAKE) -C $(FUTDIR) bench
 
-plus: module_load cub-bench futhark-bench benchmark
+plus: cub-bench futhark-bench benchmark
