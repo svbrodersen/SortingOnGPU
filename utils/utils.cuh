@@ -1,3 +1,4 @@
+#include <map>
 #include <random>
 
 #define GPU_RUNS 400
@@ -32,4 +33,60 @@ bool validateZ(Z* A, uint32_t sizeAB) {
         return false;
       }
     return true;
+}
+
+template <typename T>
+bool checkElementPreservation(T *original, T *sorted, uint32_t N) {
+  // The map key must be large enough to hold T, or simply use T.
+  std::map<T, int> original_counts;
+  std::map<T, int> sorted_counts;
+
+  // Count frequencies in original array
+  for (uint32_t i = 0; i < N; i++) {
+    original_counts[original[i]]++;
+  }
+
+  // Count frequencies in sorted array
+  for (uint32_t i = 0; i < N; i++) {
+    sorted_counts[sorted[i]]++;
+  }
+
+  // Compare the maps
+  if (original_counts.size() != sorted_counts.size()) {
+    printf("ERROR: Frequency map size mismatch. Original unique: %lu, Sorted "
+           "unique: %lu\n",
+           original_counts.size(), sorted_counts.size());
+    return false;
+  }
+
+  // Iterate and compare counts
+  for (auto const &[key, original_count] : original_counts) {
+    if (sorted_counts.find(key) == sorted_counts.end()) {
+      // Use appropriate format specifier for the key
+      if constexpr (std::is_same_v<T, uint32_t>) {
+        printf("ERROR: Element %u from original array is missing in sorted "
+               "array.\n",
+               key);
+      } else {
+        printf("ERROR: Element %d from original array is missing in sorted "
+               "array.\n",
+               key);
+      }
+      return false;
+    }
+    int sorted_count = sorted_counts[key];
+    if (sorted_count != original_count) {
+      if constexpr (std::is_same_v<T, uint32_t>) {
+        printf(
+            "ERROR: Element count mismatch for %u. Original: %d, Sorted: %d\n",
+            key, original_count, sorted_count);
+      } else {
+        printf(
+            "ERROR: Element count mismatch for %d. Original: %d, Sorted: %d\n",
+            key, original_count, sorted_count);
+      }
+      return false;
+    }
+  }
+  return true;
 }
